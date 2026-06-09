@@ -1,0 +1,12 @@
+{
+  "name": "Video Upscaler 1080p",
+  "short_name": "Upscaler",
+  "description": "Re-encode clips to 1080p locally on your phone.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
