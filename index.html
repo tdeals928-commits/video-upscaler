@@ -66,6 +66,19 @@
   .btag { font-size: 12px; color: var(--text); white-space: nowrap; flex-shrink: 0; }
   .burl { flex: 1; min-width: 0; font-size: 12px; color: var(--accent); font-family: ui-monospace, Menlo, monospace; word-break: break-all; text-decoration: none; }
   .copy { flex-shrink: 0; width: auto; margin: 0; padding: 5px 11px; font-size: 11px; font-weight: 600; background: #1f2630; color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  #queue { margin-top: 14px; }
+  #queue:empty { display: none; }
+  .qitem { display: flex; align-items: center; gap: 10px; padding: 11px 0; border-top: 1px solid var(--border); }
+  .qitem:first-child { border-top: none; }
+  .qicon { flex-shrink: 0; font-size: 18px; width: 20px; text-align: center; }
+  .qmain { flex: 1; min-width: 0; }
+  .qname { font-size: 13px; font-weight: 600; word-break: break-all; }
+  .qstat { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .qbar { height: 6px; background: #0d1117; border: 1px solid var(--border); border-radius: 99px; overflow: hidden; margin-top: 6px; display: none; }
+  .qbar > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--good)); transition: width .2s; }
+  .qactions { display: flex; gap: 6px; flex-shrink: 0; }
+  .qbtn { width: auto; margin: 0; padding: 7px 12px; font-size: 12px; font-weight: 600; border-radius: 7px; background: #1f2630; color: var(--text); border: 1px solid var(--border); }
+  .qbtn.save { background: var(--good); color: #06210f; border: none; }
 </style>
 </head>
 <body>
@@ -88,13 +101,12 @@
 
   <div class="panel">
     <div id="drop">
-      <div class="big">Tap to choose a video</div>
-      <div class="small">from Photos or Files — MP4, MOV, …</div>
-      <input id="fileInput" type="file" accept="video/*" hidden />
+      <div class="big">Tap to choose videos</div>
+      <div class="small">one or many — from Photos or Files (MP4, MOV, …)</div>
+      <input id="fileInput" type="file" accept="video/*" multiple hidden />
     </div>
-    <div class="file" id="fileInfo" style="display:none">
-      <span>🎬</span><span class="name" id="fileName"></span><span id="fileSize" style="color:var(--muted)"></span>
-    </div>
+
+    <div id="queue"></div>
 
     <div class="row">
       <div class="field">
@@ -126,18 +138,18 @@
       <div class="status"><span id="statusText">Starting…</span><span id="pct">0%</span></div>
     </div>
 
-    <div class="result" id="result">
-      <div class="ok" id="okText">✓ Done</div>
+    <button class="save" id="saveAll" style="display:none">⬇ Save all to Photos / apps</button>
+    <div class="note" id="saveNote" style="display:none">Tap <b>Save</b> on a video to open the Share sheet — choose <b>Save Video</b> (Photos) or send to an app. On big batches, saving one at a time is most reliable.</div>
+
+    <div class="result" id="previewWrap" style="display:none">
       <video id="outVideo" controls playsinline></video>
-      <button class="save" id="saveBtn">⬇ Save / Share to apps</button>
-      <div class="note" id="saveNote">Opens the Share sheet — pick <b>Save Video</b> (to Photos) or send straight to TikTok / Instagram.</div>
     </div>
 
     <div class="err" id="errBox"></div>
     <div class="engine" id="engineState">Engine loads on first run (~30&nbsp;MB, cached after).</div>
   </div>
 
-  <p class="note">⚡ Runs <b>100% on your phone</b> with ffmpeg (WebAssembly). Best for clips under ~1 minute — longer videos may run out of memory on the phone.</p>
+  <p class="note">⚡ Runs <b>100% on your phone</b> with ffmpeg (WebAssembly). Videos are processed one at a time. Best for clips under ~1 minute — long clips or very large batches may run out of memory (save finished ones, then reload).</p>
   <p class="foot">Tip: in Safari, <b>Share → Add to Home Screen</b> to use it like an app, even offline.</p>
 </div>
 
@@ -145,8 +157,9 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-let file = null, ffmpeg = null, engineReady = false, outBlob = null, outName = "video_1080p.mp4";
-let srcW = 0, srcH = 0, metaPromise = null;
+let ffmpeg = null, engineReady = false;
+let jobs = [], idSeq = 1, running = false;
+let currentJob = null, batchDone = 0, batchTotal = 0;
 
 function copyURL(text, btn) {
   const done = () => { const o = btn.textContent; btn.textContent = "Copied!"; setTimeout(() => (btn.textContent = o), 1200); };
@@ -170,42 +183,6 @@ const crfHints = {
   "16": "Larger file, extra quality headroom.",
 };
 
-// Describe what Auto will produce, based on the source orientation.
-function autoTarget() {
-  if (!srcW || !srcH) return null;
-  const even = (n) => Math.max(2, Math.round(n / 2) * 2);
-  if (srcH > srcW) return "1080×" + even((1080 * srcH) / srcW) + " (vertical)";
-  if (srcW > srcH) return even((1080 * srcW) / srcH) + "×1080 (landscape)";
-  return "1080×1080 (square)";
-}
-function updatePresetHint() {
-  const p = $("preset").value;
-  if (p === "auto") {
-    const t = autoTarget();
-    $("presetHint").textContent = t
-      ? "Will export " + t + " — full frame, no black bars."
-      : "Matches your video’s shape — no black bars added.";
-  } else {
-    $("presetHint").textContent = presetHints[p];
-  }
-}
-$("preset").onchange = updatePresetHint;
-$("crf").onchange = (e) => ($("crfHint").textContent = crfHints[e.target.value]);
-
-// Read the source video's pixel dimensions so Auto can match its orientation.
-function detectMeta(f) {
-  srcW = 0; srcH = 0;
-  metaPromise = new Promise((resolve) => {
-    const v = document.createElement("video");
-    v.preload = "metadata";
-    const done = () => { try { URL.revokeObjectURL(v.src); } catch {} updatePresetHint(); resolve(); };
-    v.onloadedmetadata = () => { srcW = v.videoWidth; srcH = v.videoHeight; done(); };
-    v.onerror = done;
-    setTimeout(done, 4000); // don't block forever if metadata won't load
-    v.src = URL.createObjectURL(f);
-  });
-}
-
 function fmtSize(b) {
   if (b == null) return "";
   const u = ["B", "KB", "MB", "GB"]; let i = 0;
@@ -213,34 +190,155 @@ function fmtSize(b) {
   return b.toFixed(b < 10 && i > 0 ? 1 : 0) + " " + u[i];
 }
 
-function pickFile(f) {
-  if (!f) return;
-  file = f;
-  $("fileInfo").style.display = "flex";
-  $("fileName").textContent = f.name;
-  $("fileSize").textContent = "· " + fmtSize(f.size);
-  $("go").disabled = false;
-  $("result").style.display = "none";
-  $("errBox").style.display = "none";
-  detectMeta(f);
+// What a given preset will produce for a source of w×h.
+function autoTarget(w, h) {
+  if (!w || !h) return null;
+  const even = (n) => Math.max(2, Math.round(n / 2) * 2);
+  if (h > w) return "1080×" + even((1080 * h) / w) + " (vertical)";
+  if (w > h) return even((1080 * w) / h) + "×1080 (landscape)";
+  return "1080×1080 (square)";
 }
+function targetDims(preset, w, h) {
+  if (preset === "landscape") return "1920×1080";
+  if (preset === "portrait") return "1080×1920";
+  if (preset === "square") return "1080×1080";
+  if (preset === "fit") return "1080 tall";
+  const t = autoTarget(w, h);
+  return t ? t.replace(/ \(.*\)/, "") : "1080p";
+}
+function curPreset() { return $("preset").value; }
+
+function updatePresetHint() {
+  const p = curPreset();
+  if (p === "auto") {
+    const ready = jobs.filter((j) => j.w && j.h);
+    if (jobs.length === 1 && ready.length === 1) {
+      const t = autoTarget(jobs[0].w, jobs[0].h);
+      $("presetHint").textContent = t ? "Will export " + t + " — no black bars." : "Matches your video’s shape — no black bars.";
+    } else if (jobs.length > 1) {
+      $("presetHint").textContent = "Each video keeps its own shape — no black bars.";
+    } else {
+      $("presetHint").textContent = "Matches your video’s shape — no black bars added.";
+    }
+  } else {
+    $("presetHint").textContent = presetHints[p];
+  }
+}
+$("preset").onchange = () => { updatePresetHint(); jobs.forEach(renderJob); };
+$("crf").onchange = (e) => ($("crfHint").textContent = crfHints[e.target.value]);
+
+// Read a video's pixel dimensions (for orientation-aware Auto).
+function detectDims(f) {
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    const done = (w, h) => { try { URL.revokeObjectURL(v.src); } catch {} resolve({ w, h }); };
+    v.onloadedmetadata = () => done(v.videoWidth, v.videoHeight);
+    v.onerror = () => done(0, 0);
+    setTimeout(() => done(0, 0), 5000);
+    v.src = URL.createObjectURL(f);
+  });
+}
+
+function safeBase(name) {
+  return (name.replace(/\.[^.]+$/, "") || "video").replace(/[^a-z0-9_\-]+/gi, "_");
+}
+
+function addFiles(list) {
+  const arr = Array.from(list || []).filter(
+    (f) => f && (f.type.startsWith("video") || /\.(mp4|mov|m4v|webm|mkv|avi|3gp)$/i.test(f.name))
+  );
+  for (const f of arr) {
+    const job = { id: idSeq++, file: f, name: f.name, w: 0, h: 0, status: "queued",
+                  blob: null, size: 0, dims: "", error: "", outName: safeBase(f.name) + "_1080p.mp4", el: null };
+    jobs.push(job);
+    detectDims(f).then(({ w, h }) => { job.w = w; job.h = h; renderJob(job); updatePresetHint(); });
+  }
+  renderQueue();
+  updatePresetHint();
+  refreshControls();
+}
+
+function removeJob(job) {
+  if (running) return;
+  jobs = jobs.filter((j) => j !== job);
+  renderQueue();
+  updatePresetHint();
+  refreshControls();
+}
+
+function renderQueue() {
+  const q = $("queue");
+  q.innerHTML = "";
+  for (const job of jobs) {
+    const row = document.createElement("div"); row.className = "qitem";
+    const icon = document.createElement("div"); icon.className = "qicon"; icon.textContent = "🎬";
+    const main = document.createElement("div"); main.className = "qmain";
+    const name = document.createElement("div"); name.className = "qname"; name.textContent = job.name;
+    const stat = document.createElement("div"); stat.className = "qstat";
+    const barWrap = document.createElement("div"); barWrap.className = "qbar";
+    const bar = document.createElement("div"); barWrap.appendChild(bar);
+    main.append(name, stat, barWrap);
+    const actions = document.createElement("div"); actions.className = "qactions";
+    row.append(icon, main, actions);
+    q.appendChild(row);
+    job.el = { icon, stat, barWrap, bar, actions };
+    renderJob(job);
+  }
+}
+
+function renderJob(job) {
+  const e = job.el; if (!e) return;
+  e.actions.innerHTML = "";
+  e.barWrap.style.display = "none";
+  if (job.status === "queued") {
+    e.icon.textContent = "🎬";
+    e.stat.style.color = "var(--muted)";
+    e.stat.textContent = job.w && job.h ? "Ready · " + fmtSize(job.file.size) + " → " + targetDims(curPreset(), job.w, job.h) : "Ready · " + fmtSize(job.file.size);
+    if (!running) {
+      const rm = document.createElement("button"); rm.className = "qbtn"; rm.textContent = "✕"; rm.title = "Remove";
+      rm.onclick = () => removeJob(job); e.actions.appendChild(rm);
+    }
+  } else if (job.status === "reading") {
+    e.stat.style.color = "var(--muted)"; e.stat.textContent = "Reading…";
+    e.barWrap.style.display = "block"; e.bar.style.width = "4%";
+  } else if (job.status === "encoding") {
+    e.stat.style.color = "var(--muted)"; e.stat.textContent = "Encoding… " + (job.progress || 0) + "%";
+    e.barWrap.style.display = "block"; e.bar.style.width = (job.progress || 0) + "%";
+  } else if (job.status === "done") {
+    e.icon.textContent = "✅";
+    e.stat.style.color = "var(--good)"; e.stat.textContent = "Done · " + (job.dims || "1080p") + " · " + fmtSize(job.size);
+    const sv = document.createElement("button"); sv.className = "qbtn save"; sv.textContent = "Save";
+    sv.onclick = () => saveBlob(job.blob, job.outName); e.actions.appendChild(sv);
+    const pv = document.createElement("button"); pv.className = "qbtn"; pv.textContent = "▶"; pv.title = "Preview";
+    pv.onclick = () => preview(job); e.actions.appendChild(pv);
+  } else if (job.status === "error") {
+    e.icon.textContent = "⚠️";
+    e.stat.style.color = "var(--bad)"; e.stat.textContent = job.error || "Failed";
+  }
+}
+
 $("drop").onclick = () => $("fileInput").click();
-$("fileInput").onchange = (e) => pickFile(e.target.files[0]);
+$("fileInput").onchange = (e) => { addFiles(e.target.files); e.target.value = ""; };
+["dragover", "dragenter"].forEach((ev) => $("drop").addEventListener(ev, (e) => e.preventDefault()));
+$("drop").addEventListener("drop", (e) => { e.preventDefault(); addFiles(e.dataTransfer.files); });
 
 async function loadEngine() {
   if (engineReady) return;
   const { FFmpeg } = window.FFmpegWASM;
   ffmpeg = new FFmpeg();
   ffmpeg.on("progress", ({ progress }) => {
-    if (Number.isFinite(progress)) {
-      const p = Math.max(0, Math.min(99, Math.round(progress * 100)));
-      setProgress(p, "Encoding on device…");
+    if (!currentJob || !Number.isFinite(progress)) return;
+    currentJob.progress = Math.max(0, Math.min(99, Math.round(progress * 100)));
+    renderJob(currentJob);
+    if (batchTotal > 0) {
+      const overall = Math.min(99, Math.round(((batchDone + currentJob.progress / 100) / batchTotal) * 100));
+      setProgress(overall, "Processing " + (batchDone + 1) + " of " + batchTotal + "…");
     }
   });
   $("engineState").textContent = "Loading video engine (~30 MB)…";
   // No classWorkerURL: the lib then auto-creates a *classic* worker from the
   // same folder as vendor/ffmpeg.js (same-origin), where importScripts works.
-  // Passing classWorkerURL forces a module worker, which can't load the UMD core.
   await ffmpeg.load({
     coreURL: VENDOR + "ffmpeg-core.js",
     wasmURL: VENDOR + "ffmpeg-core.wasm",
@@ -249,102 +347,148 @@ async function loadEngine() {
   $("engineState").textContent = "Engine ready ✓";
 }
 
-function buildArgs(preset, crf, inName, outName) {
+function buildArgs(preset, crf, inName, outName, w, h) {
   let vf;
   if (preset === "auto") {
     // Match the source orientation so we never add black bars.
-    if (srcW && srcH && srcH > srcW) vf = "scale=1080:-2:flags=lanczos,setsar=1";       // vertical  -> 1080 wide
-    else if (srcW && srcH && srcW > srcH) vf = "scale=-2:1080:flags=lanczos,setsar=1";  // horizontal-> 1080 tall
-    else if (srcW && srcH) vf = "scale=1080:1080:flags=lanczos,setsar=1";               // square
-    else vf = "scale=-2:1080:flags=lanczos,setsar=1";                                   // unknown   -> 1080 tall, no bars
+    if (w && h && h > w) vf = "scale=1080:-2:flags=lanczos,setsar=1";       // vertical   -> 1080 wide
+    else if (w && h && w > h) vf = "scale=-2:1080:flags=lanczos,setsar=1";  // horizontal -> 1080 tall
+    else if (w && h) vf = "scale=1080:1080:flags=lanczos,setsar=1";         // square
+    else vf = "scale=-2:1080:flags=lanczos,setsar=1";                       // unknown    -> 1080 tall, no bars
   } else if (preset === "fit") {
     vf = "scale=-2:1080:flags=lanczos,setsar=1";
   } else {
-    const [w, h] = { landscape: [1920, 1080], portrait: [1080, 1920], square: [1080, 1080] }[preset];
-    vf = `scale=${w}:${h}:force_original_aspect_ratio=decrease:flags=lanczos,` +
-         `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+    const [W, H] = { landscape: [1920, 1080], portrait: [1080, 1920], square: [1080, 1080] }[preset];
+    vf = `scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
+         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
   }
   return [
-    "-i", inName,
-    "-vf", vf,
-    "-c:v", "libx264",
-    "-crf", String(crf),
-    "-preset", "medium",
-    "-pix_fmt", "yuv420p",
-    "-movflags", "+faststart",
-    "-c:a", "aac",
-    "-b:a", "192k",
+    "-i", inName, "-vf", vf,
+    "-c:v", "libx264", "-crf", String(crf), "-preset", "medium",
+    "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+    "-c:a", "aac", "-b:a", "192k",
     outName,
   ];
 }
 
+async function processJob(job, fetchFile, preset, crf) {
+  const ext = (job.name.split(".").pop() || "mp4").toLowerCase().replace(/[^a-z0-9]/g, "") || "mp4";
+  const inName = "in_" + job.id + "." + ext;
+  const outFs = "out_" + job.id + ".mp4";
+  job.status = "reading"; renderJob(job);
+  await ffmpeg.writeFile(inName, await fetchFile(job.file));
+
+  job.dims = targetDims(preset, job.w, job.h);
+  job.status = "encoding"; job.progress = 0; renderJob(job);
+  currentJob = job;
+  try {
+    await ffmpeg.exec(buildArgs(preset, crf, inName, outFs, job.w, job.h));
+  } finally {
+    currentJob = null;
+  }
+  const data = await ffmpeg.readFile(outFs);
+  job.blob = new Blob([data.buffer], { type: "video/mp4" });
+  job.size = job.blob.size;
+  try { await ffmpeg.deleteFile(inName); await ffmpeg.deleteFile(outFs); } catch {}
+  job.status = "done"; renderJob(job);
+}
+
 $("go").onclick = async () => {
-  if (!file) return;
-  $("go").disabled = true;
+  const pending = jobs.filter((j) => j.status === "queued" || j.status === "error");
+  if (running || !pending.length) return;
+  running = true;
   $("preset").disabled = $("crf").disabled = true;
-  $("result").style.display = "none";
   $("errBox").style.display = "none";
   $("progWrap").style.display = "block";
-  setProgress(0, "Preparing…");
+  renderQueue(); // drop the per-row remove buttons while running
+  refreshControls();
+  setProgress(0, "Loading engine…");
 
   try {
     await loadEngine();
-    const { fetchFile } = window.FFmpegUtil;
-
-    const ext = (file.name.split(".").pop() || "mp4").toLowerCase().replace(/[^a-z0-9]/g, "") || "mp4";
-    const inName = "input." + ext;
-    const base = (file.name.replace(/\.[^.]+$/, "") || "video").replace(/[^a-z0-9_\-]+/gi, "_");
-    outName = base + "_1080p.mp4";
-
-    setProgress(0, "Reading file…");
-    await ffmpeg.writeFile(inName, await fetchFile(file));
-
-    if (metaPromise) { try { await metaPromise; } catch {} } // ensure orientation is known
-    const args = buildArgs($("preset").value, $("crf").value, inName, "output.mp4");
-    setProgress(0, "Encoding on device…");
-    await ffmpeg.exec(args);
-
-    const data = await ffmpeg.readFile("output.mp4");
-    outBlob = new Blob([data.buffer], { type: "video/mp4" });
-
-    try { await ffmpeg.deleteFile(inName); await ffmpeg.deleteFile("output.mp4"); } catch {}
-
-    setProgress(100, "Complete");
-    $("okText").textContent = "✓ Done — " + fmtSize(outBlob.size) + " · 1080p";
-    $("outVideo").src = URL.createObjectURL(outBlob);
-    $("result").style.display = "block";
-  } catch (err) {
-    fail(err && err.message ? err.message : String(err));
-  } finally {
-    $("go").disabled = false;
-    $("preset").disabled = $("crf").disabled = false;
+  } catch (e) {
+    fail("Couldn’t load the video engine: " + (e.message || e));
+    running = false; $("preset").disabled = $("crf").disabled = false; refreshControls();
+    return;
   }
+
+  const { fetchFile } = window.FFmpegUtil;
+  const preset = curPreset(), crf = $("crf").value;
+  batchTotal = pending.length; batchDone = 0;
+
+  for (let i = 0; i < pending.length; i++) {
+    const job = pending[i];
+    batchDone = i;
+    setProgress(Math.round((i / batchTotal) * 100), "Processing " + (i + 1) + " of " + batchTotal + "…");
+    try {
+      await processJob(job, fetchFile, preset, crf);
+    } catch (err) {
+      job.status = "error"; job.error = friendlyErr(err); renderJob(job);
+    }
+    refreshControls();
+  }
+
+  const okCount = jobs.filter((j) => j.status === "done").length;
+  setProgress(100, batchTotal > 1 ? "Finished — " + okCount + " ready" : "Complete");
+  running = false;
+  $("preset").disabled = $("crf").disabled = false;
+  renderQueue(); // restore remove buttons on any still-queued items
+  refreshControls();
 };
 
-$("saveBtn").onclick = async () => {
-  if (!outBlob) return;
-  const f = new File([outBlob], outName, { type: "video/mp4" });
+function refreshControls() {
+  const pending = jobs.filter((j) => j.status === "queued" || j.status === "error").length;
+  const doneN = jobs.filter((j) => j.status === "done").length;
+  $("go").disabled = running || pending === 0;
+  $("go").textContent = running ? "Working…" : pending > 1 ? "Upscale " + pending + " videos" : "Upscale to 1080p";
+  $("saveAll").style.display = doneN > 1 ? "block" : "none";
+  $("saveAll").textContent = "⬇ Save all " + doneN + " to Photos / apps";
+  $("saveNote").style.display = doneN >= 1 ? "block" : "none";
+}
+
+async function saveBlob(blob, name) {
+  const f = new File([blob], name, { type: "video/mp4" });
   if (navigator.canShare && navigator.canShare({ files: [f] })) {
-    try { await navigator.share({ files: [f], title: outName }); return; } catch { return; }
+    try { await navigator.share({ files: [f], title: name }); return; } catch { return; }
   }
-  const url = URL.createObjectURL(outBlob);
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url; a.download = outName; document.body.appendChild(a); a.click(); a.remove();
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 15000);
+}
+
+$("saveAll").onclick = async () => {
+  const done = jobs.filter((j) => j.status === "done" && j.blob);
+  if (!done.length) return;
+  const files = done.map((j) => new File([j.blob], j.outName, { type: "video/mp4" }));
+  if (navigator.canShare && navigator.canShare({ files })) {
+    try { await navigator.share({ files, title: done.length + " videos (1080p)" }); return; } catch { return; }
+  }
+  for (const j of done) { await saveBlob(j.blob, j.outName); await new Promise((r) => setTimeout(r, 400)); }
 };
+
+function preview(job) {
+  const v = $("outVideo");
+  v.src = URL.createObjectURL(job.blob);
+  $("previewWrap").style.display = "block";
+  v.scrollIntoView({ behavior: "smooth", block: "center" });
+}
 
 function setProgress(p, text) {
   $("barFill").style.width = p + "%";
   $("pct").textContent = p + "%";
   $("statusText").textContent = text;
 }
+function friendlyErr(err) {
+  let m = err && err.message ? err.message : String(err);
+  const l = m.toLowerCase();
+  if (l.includes("memory") || l.includes("abort") || l.includes("oom")) return "Out of memory — clip too large for this device";
+  if (l.includes("errno") || l.includes("fs error") || l.includes("no such file")) return "Couldn’t read this file — unsupported or corrupt video";
+  return "Failed — " + m.slice(0, 80);
+}
 function fail(msg) {
   $("progWrap").style.display = "none";
   $("errBox").style.display = "block";
-  const lower = msg.toLowerCase();
-  if (lower.includes("memory") || lower.includes("abort") || lower.includes("oom")) {
-    msg = "Ran out of memory on this device. Try a shorter clip, a smaller target size, or the Balanced quality.";
-  }
   $("errBox").textContent = "⚠ " + msg;
 }
 
