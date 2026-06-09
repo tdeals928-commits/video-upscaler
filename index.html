@@ -100,12 +100,13 @@
       <div class="field">
         <label for="preset">Target size</label>
         <select id="preset">
-          <option value="landscape">1080p Landscape (1920×1080)</option>
-          <option value="portrait">1080p Portrait (1080×1920)</option>
-          <option value="square">1080p Square (1080×1080)</option>
+          <option value="auto" selected>Auto — match my video (recommended)</option>
+          <option value="landscape">Force Landscape (1920×1080)</option>
+          <option value="portrait">Force Portrait (1080×1920)</option>
+          <option value="square">Force Square (1080×1080)</option>
           <option value="fit">Keep aspect ratio (1080 tall)</option>
         </select>
-        <div class="hint" id="presetHint">Pads to exact 1920×1080 — registers as 1080p.</div>
+        <div class="hint" id="presetHint">Matches your video’s shape — no black bars added.</div>
       </div>
       <div class="field">
         <label for="crf">Quality</label>
@@ -145,6 +146,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let file = null, ffmpeg = null, engineReady = false, outBlob = null, outName = "video_1080p.mp4";
+let srcW = 0, srcH = 0, metaPromise = null;
 
 function copyURL(text, btn) {
   const done = () => { const o = btn.textContent; btn.textContent = "Copied!"; setTimeout(() => (btn.textContent = o), 1200); };
@@ -157,18 +159,52 @@ function copyURL(text, btn) {
 const VENDOR = new URL("vendor/", location.href).href;
 
 const presetHints = {
-  landscape: "Pads to exact 1920×1080 — registers as 1080p.",
-  portrait: "Pads to exact 1080×1920 — vertical (TikTok / Reels).",
-  square: "Pads to exact 1080×1080 — square posts.",
-  fit: "Scales to 1080 tall, width auto. No black bars.",
+  landscape: "Forces 1920×1080. Adds black bars to vertical clips.",
+  portrait: "Forces 1080×1920. Adds black bars to landscape clips.",
+  square: "Forces 1080×1080. Adds black bars to non-square clips.",
+  fit: "Scales to 1080 tall, keeps shape. No black bars.",
 };
 const crfHints = {
   "18": "Recommended. Looks like the source, reasonable size.",
   "20": "Smaller file, still high quality.",
   "16": "Larger file, extra quality headroom.",
 };
-$("preset").onchange = (e) => ($("presetHint").textContent = presetHints[e.target.value]);
+
+// Describe what Auto will produce, based on the source orientation.
+function autoTarget() {
+  if (!srcW || !srcH) return null;
+  const even = (n) => Math.max(2, Math.round(n / 2) * 2);
+  if (srcH > srcW) return "1080×" + even((1080 * srcH) / srcW) + " (vertical)";
+  if (srcW > srcH) return even((1080 * srcW) / srcH) + "×1080 (landscape)";
+  return "1080×1080 (square)";
+}
+function updatePresetHint() {
+  const p = $("preset").value;
+  if (p === "auto") {
+    const t = autoTarget();
+    $("presetHint").textContent = t
+      ? "Will export " + t + " — full frame, no black bars."
+      : "Matches your video’s shape — no black bars added.";
+  } else {
+    $("presetHint").textContent = presetHints[p];
+  }
+}
+$("preset").onchange = updatePresetHint;
 $("crf").onchange = (e) => ($("crfHint").textContent = crfHints[e.target.value]);
+
+// Read the source video's pixel dimensions so Auto can match its orientation.
+function detectMeta(f) {
+  srcW = 0; srcH = 0;
+  metaPromise = new Promise((resolve) => {
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    const done = () => { try { URL.revokeObjectURL(v.src); } catch {} updatePresetHint(); resolve(); };
+    v.onloadedmetadata = () => { srcW = v.videoWidth; srcH = v.videoHeight; done(); };
+    v.onerror = done;
+    setTimeout(done, 4000); // don't block forever if metadata won't load
+    v.src = URL.createObjectURL(f);
+  });
+}
 
 function fmtSize(b) {
   if (b == null) return "";
@@ -186,6 +222,7 @@ function pickFile(f) {
   $("go").disabled = false;
   $("result").style.display = "none";
   $("errBox").style.display = "none";
+  detectMeta(f);
 }
 $("drop").onclick = () => $("fileInput").click();
 $("fileInput").onchange = (e) => pickFile(e.target.files[0]);
@@ -214,8 +251,14 @@ async function loadEngine() {
 
 function buildArgs(preset, crf, inName, outName) {
   let vf;
-  if (preset === "fit") {
-    vf = "scale=-2:1080:flags=lanczos";
+  if (preset === "auto") {
+    // Match the source orientation so we never add black bars.
+    if (srcW && srcH && srcH > srcW) vf = "scale=1080:-2:flags=lanczos,setsar=1";       // vertical  -> 1080 wide
+    else if (srcW && srcH && srcW > srcH) vf = "scale=-2:1080:flags=lanczos,setsar=1";  // horizontal-> 1080 tall
+    else if (srcW && srcH) vf = "scale=1080:1080:flags=lanczos,setsar=1";               // square
+    else vf = "scale=-2:1080:flags=lanczos,setsar=1";                                   // unknown   -> 1080 tall, no bars
+  } else if (preset === "fit") {
+    vf = "scale=-2:1080:flags=lanczos,setsar=1";
   } else {
     const [w, h] = { landscape: [1920, 1080], portrait: [1080, 1920], square: [1080, 1080] }[preset];
     vf = `scale=${w}:${h}:force_original_aspect_ratio=decrease:flags=lanczos,` +
@@ -256,6 +299,7 @@ $("go").onclick = async () => {
     setProgress(0, "Reading file…");
     await ffmpeg.writeFile(inName, await fetchFile(file));
 
+    if (metaPromise) { try { await metaPromise; } catch {} } // ensure orientation is known
     const args = buildArgs($("preset").value, $("crf").value, inName, "output.mp4");
     setProgress(0, "Encoding on device…");
     await ffmpeg.exec(args);
