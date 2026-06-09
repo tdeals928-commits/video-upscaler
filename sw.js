@@ -1,7 +1,7 @@
 // Service worker: makes the app installable and fully offline-capable.
 // The app shell is precached on install; the larger engine files (vendor/) are
 // cached at runtime on first use so a flaky connection can't fail the install.
-const CACHE = "upscaler-v5";
+const CACHE = "upscaler-v6";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg"];
 
 self.addEventListener("install", (e) => {

@@ -70,7 +70,9 @@
   #queue:empty { display: none; }
   .qitem { display: flex; align-items: center; gap: 10px; padding: 11px 0; border-top: 1px solid var(--border); }
   .qitem:first-child { border-top: none; }
-  .qicon { flex-shrink: 0; font-size: 18px; width: 20px; text-align: center; }
+  .qicon { flex-shrink: 0; font-size: 20px; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; position: relative; }
+  .qthumb { width: 48px; height: 48px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); background: #000; display: block; }
+  .qbadge { position: absolute; right: -4px; bottom: -4px; width: 18px; height: 18px; border-radius: 50%; background: var(--good); color: #06210f; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2px solid var(--panel); }
   .qmain { flex: 1; min-width: 0; }
   .qname { font-size: 13px; font-weight: 600; word-break: break-all; }
   .qstat { font-size: 12px; color: var(--muted); margin-top: 3px; }
@@ -234,15 +236,35 @@ function updatePresetHint() {
 $("preset").onchange = () => { updatePresetHint(); jobs.forEach(renderJob); };
 $("crf").onchange = (e) => ($("crfHint").textContent = crfHints[e.target.value]);
 
-// Read a video's pixel dimensions (for orientation-aware Auto).
-function detectDims(f) {
+// Read a video's dimensions/duration AND grab a thumbnail frame, in one decode.
+// onMeta fires early (as soon as w/h/duration are known) so the row updates
+// before the thumbnail (which needs a seek) is ready.
+function probe(f, onMeta) {
   return new Promise((resolve) => {
     const v = document.createElement("video");
-    v.preload = "metadata";
-    const done = (w, h, d) => { try { URL.revokeObjectURL(v.src); } catch {} resolve({ w, h, d }); };
-    v.onloadedmetadata = () => done(v.videoWidth, v.videoHeight, v.duration);
-    v.onerror = () => done(0, 0, 0);
-    setTimeout(() => done(0, 0, 0), 5000);
+    v.preload = "auto"; v.muted = true; v.playsInline = true;
+    let w = 0, h = 0, d = 0, done = false;
+    const finish = (thumb) => { if (done) return; done = true; try { URL.revokeObjectURL(v.src); } catch {} resolve({ thumb }); };
+    const grab = () => {
+      if (done) return;
+      try {
+        if (!w || !h) return finish(null);
+        const S = 96; // thumbnail is a 96×96 cover crop
+        const c = document.createElement("canvas"); c.width = S; c.height = S;
+        const ctx = c.getContext("2d");
+        const r = Math.max(S / w, S / h), dw = w * r, dh = h * r;
+        ctx.drawImage(v, (S - dw) / 2, (S - dh) / 2, dw, dh);
+        finish(c.toDataURL("image/jpeg", 0.6));
+      } catch { finish(null); }
+    };
+    v.onloadedmetadata = () => { w = v.videoWidth; h = v.videoHeight; d = v.duration; if (onMeta) onMeta(w, h, d); };
+    v.onloadeddata = () => {
+      v.onseeked = grab;
+      try { v.currentTime = Math.min(0.1, (v.duration || 1) * 0.1); } catch { grab(); }
+      setTimeout(grab, 1500); // fallback if the seek never settles
+    };
+    v.onerror = () => finish(null);
+    setTimeout(grab, 6000); // overall safety net
     v.src = URL.createObjectURL(f);
   });
 }
@@ -256,10 +278,11 @@ function addFiles(list) {
     (f) => f && (f.type.startsWith("video") || /\.(mp4|mov|m4v|webm|mkv|avi|3gp)$/i.test(f.name))
   );
   for (const f of arr) {
-    const job = { id: idSeq++, file: f, name: f.name, w: 0, h: 0, dur: 0, status: "queued",
+    const job = { id: idSeq++, file: f, name: f.name, w: 0, h: 0, dur: 0, thumb: null, status: "queued",
                   blob: null, size: 0, dims: "", error: "", outName: safeBase(f.name) + "_1080p.mp4", el: null };
     jobs.push(job);
-    detectDims(f).then(({ w, h, d }) => { job.w = w; job.h = h; job.dur = d; renderJob(job); updatePresetHint(); });
+    probe(f, (w, h, d) => { job.w = w; job.h = h; job.dur = d; renderJob(job); updatePresetHint(); })
+      .then(({ thumb }) => { job.thumb = thumb; renderJob(job); });
   }
   renderQueue();
   updatePresetHint();
@@ -294,12 +317,23 @@ function renderQueue() {
   }
 }
 
+function setIcon(e, job) {
+  e.icon.innerHTML = "";
+  if (job.thumb) {
+    const img = document.createElement("img"); img.className = "qthumb"; img.src = job.thumb; img.alt = "";
+    if (job.status === "done") { const b = document.createElement("span"); b.className = "qbadge"; b.textContent = "✓"; e.icon.append(img, b); }
+    else e.icon.appendChild(img);
+  } else {
+    e.icon.textContent = job.status === "error" ? "⚠️" : job.status === "done" ? "✅" : "🎬";
+  }
+}
+
 function renderJob(job) {
   const e = job.el; if (!e) return;
   e.actions.innerHTML = "";
   e.barWrap.style.display = "none";
+  setIcon(e, job);
   if (job.status === "queued") {
-    e.icon.textContent = "🎬";
     e.stat.style.color = "var(--muted)";
     const meta = [fmtDur(job.dur), fmtSize(job.file.size)].filter(Boolean).join(" · ");
     e.stat.textContent = job.w && job.h ? "Ready · " + meta + " → " + targetDims(curPreset(), job.w, job.h) : "Ready · " + meta;
@@ -314,7 +348,6 @@ function renderJob(job) {
     e.stat.style.color = "var(--muted)"; e.stat.textContent = "Encoding… " + (job.progress || 0) + "%";
     e.barWrap.style.display = "block"; e.bar.style.width = (job.progress || 0) + "%";
   } else if (job.status === "done") {
-    e.icon.textContent = "✅";
     e.stat.style.color = "var(--good)";
     e.stat.textContent = "Done · " + [fmtDur(job.dur), job.dims || "1080p", fmtSize(job.size)].filter(Boolean).join(" · ");
     const sv = document.createElement("button"); sv.className = "qbtn save"; sv.textContent = "Save";
@@ -322,7 +355,6 @@ function renderJob(job) {
     const pv = document.createElement("button"); pv.className = "qbtn"; pv.textContent = "▶"; pv.title = "Preview";
     pv.onclick = () => preview(job); e.actions.appendChild(pv);
   } else if (job.status === "error") {
-    e.icon.textContent = "⚠️";
     e.stat.style.color = "var(--bad)"; e.stat.textContent = job.error || "Failed";
   }
 }
