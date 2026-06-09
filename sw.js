@@ -1,11 +1,17 @@
 // Service worker: makes the app installable and fully offline-capable.
 // The app shell is precached on install; the larger engine files (vendor/) are
 // cached at runtime on first use so a flaky connection can't fail the install.
-const CACHE = "upscaler-v6";
+const CACHE = "upscaler-v7";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg"];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // No skipWaiting here: the new worker waits so the page can prompt "Refresh".
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
+});
+
+// The page posts this when the user taps "Refresh" on the update toast.
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("activate", (e) => {

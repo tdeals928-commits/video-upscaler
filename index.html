@@ -81,6 +81,17 @@
   .qactions { display: flex; gap: 6px; flex-shrink: 0; }
   .qbtn { width: auto; margin: 0; padding: 7px 12px; font-size: 12px; font-weight: 600; border-radius: 7px; background: #1f2630; color: var(--text); border: 1px solid var(--border); }
   .qbtn.save { background: var(--good); color: #06210f; border: none; }
+  .qsummary { font-size: 12px; color: var(--muted); margin-top: 12px; }
+  .qsummary:empty { display: none; }
+  .qtools { display: flex; gap: 16px; margin-top: 8px; }
+  .qtools button { width: auto; margin: 0; padding: 4px 0; background: none; border: none; color: var(--accent); font-size: 12px; font-weight: 600; }
+  .qtools button:disabled { color: var(--muted); opacity: .6; }
+  button.ghost { background: #1f2630; color: var(--text); border: 1px solid var(--border); }
+  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 50;
+           background: #1b2430; border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px 10px 16px;
+           display: flex; align-items: center; gap: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.5); max-width: 92vw; }
+  .toast span { font-size: 13px; color: var(--text); }
+  .toast button { width: auto; margin: 0; padding: 8px 14px; font-size: 13px; border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -109,6 +120,11 @@
     </div>
 
     <div id="queue"></div>
+    <div class="qsummary" id="queueSummary"></div>
+    <div class="qtools" id="queueTools" style="display:none">
+      <button id="clearDone">Clear finished</button>
+      <button id="clearAll">Clear all</button>
+    </div>
 
     <div class="row">
       <div class="field">
@@ -141,7 +157,8 @@
     </div>
 
     <button class="save" id="saveAll" style="display:none">⬇ Save all to Photos / apps</button>
-    <div class="note" id="saveNote" style="display:none">Tap <b>Save</b> on a video to open the Share sheet — choose <b>Save Video</b> (Photos) or send to an app. On big batches, saving one at a time is most reliable.</div>
+    <button class="ghost" id="downloadAll" style="display:none">⬇ Download all as .zip</button>
+    <div class="note" id="saveNote" style="display:none"><b>Save</b> opens the Share sheet (choose <b>Save Video</b> → Photos, or send to an app). <b>Download .zip</b> saves one file with every clip (goes to Files / Downloads). On big batches, saving one at a time is most reliable.</div>
 
     <div class="result" id="previewWrap" style="display:none">
       <video id="outVideo" controls playsinline></video>
@@ -155,6 +172,11 @@
   <p class="foot">Tip: in Safari, <b>Share → Add to Home Screen</b> to use it like an app, even offline.</p>
 </div>
 
+<div class="toast" id="updateToast" style="display:none">
+  <span>🎉 New version available</span>
+  <button id="updateBtn">Refresh</button>
+</div>
+
 <script src="vendor/ffmpeg.js"></script>
 <script src="vendor/util.js"></script>
 <script>
@@ -162,11 +184,27 @@ const $ = (id) => document.getElementById(id);
 let ffmpeg = null, engineReady = false;
 let jobs = [], idSeq = 1, running = false;
 let currentJob = null, batchDone = 0, batchTotal = 0;
+let encMs = 0, encSec = 0; // for ETA: accumulated encode time vs source seconds
 
 function copyURL(text, btn) {
-  const done = () => { const o = btn.textContent; btn.textContent = "Copied!"; setTimeout(() => (btn.textContent = o), 1200); };
-  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(done);
-  else done();
+  const flash = (msg) => {
+    if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+    btn.textContent = msg;
+    setTimeout(() => { btn.textContent = btn.dataset.label; delete btn.dataset.label; }, 1200);
+  };
+  const fallback = () => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.readOnly = true;
+      ta.style.position = "fixed"; ta.style.top = "0"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand("copy"); ta.remove();
+      flash(ok ? "Copied!" : "Copy failed");
+    } catch { flash("Copy failed"); }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => flash("Copied!")).catch(fallback);
+  } else fallback();
 }
 
 // Engine files are bundled locally (vendor/) so the app is self-contained and
@@ -233,8 +271,22 @@ function updatePresetHint() {
     $("presetHint").textContent = presetHints[p];
   }
 }
-$("preset").onchange = () => { updatePresetHint(); jobs.forEach(renderJob); };
-$("crf").onchange = (e) => ($("crfHint").textContent = crfHints[e.target.value]);
+$("preset").onchange = () => { updatePresetHint(); jobs.forEach(renderJob); saveSettings(); };
+$("crf").onchange = (e) => { $("crfHint").textContent = crfHints[e.target.value]; saveSettings(); };
+
+function saveSettings() {
+  try { localStorage.setItem("up_preset", $("preset").value); localStorage.setItem("up_crf", $("crf").value); } catch {}
+}
+function loadSettings() {
+  try {
+    const p = localStorage.getItem("up_preset"), c = localStorage.getItem("up_crf");
+    if (p && [...$("preset").options].some((o) => o.value === p)) $("preset").value = p;
+    if (c && [...$("crf").options].some((o) => o.value === c)) $("crf").value = c;
+  } catch {}
+  updatePresetHint();
+  $("crfHint").textContent = crfHints[$("crf").value];
+}
+loadSettings();
 
 // Read a video's dimensions/duration AND grab a thumbnail frame, in one decode.
 // onMeta fires early (as soon as w/h/duration are known) so the row updates
@@ -281,7 +333,7 @@ function addFiles(list) {
     const job = { id: idSeq++, file: f, name: f.name, w: 0, h: 0, dur: 0, thumb: null, status: "queued",
                   blob: null, size: 0, dims: "", error: "", outName: safeBase(f.name) + "_1080p.mp4", el: null };
     jobs.push(job);
-    probe(f, (w, h, d) => { job.w = w; job.h = h; job.dur = d; renderJob(job); updatePresetHint(); })
+    probe(f, (w, h, d) => { job.w = w; job.h = h; job.dur = d; renderJob(job); updatePresetHint(); updateSummary(); })
       .then(({ thumb }) => { job.thumb = thumb; renderJob(job); });
   }
   renderQueue();
@@ -374,7 +426,9 @@ async function loadEngine() {
     renderJob(currentJob);
     if (batchTotal > 0) {
       const overall = Math.min(99, Math.round(((batchDone + currentJob.progress / 100) / batchTotal) * 100));
-      setProgress(overall, "Processing " + (batchDone + 1) + " of " + batchTotal + "…");
+      const eta = etaText();
+      const base = "Processing " + (batchDone + 1) + " of " + batchTotal;
+      setProgress(overall, eta ? base + " · " + eta : base + "…");
     }
   });
   $("engineState").textContent = "Loading video engine (~30 MB)…";
@@ -422,11 +476,13 @@ async function processJob(job, fetchFile, preset, crf) {
   job.dims = targetDims(preset, job.w, job.h);
   job.status = "encoding"; job.progress = 0; renderJob(job);
   currentJob = job;
+  const t0 = performance.now();
   try {
     await ffmpeg.exec(buildArgs(preset, crf, inName, outFs, job.w, job.h));
   } finally {
     currentJob = null;
   }
+  encMs += performance.now() - t0; encSec += job.dur || 0; // calibrate ETA from real timings
   const data = await ffmpeg.readFile(outFs);
   job.blob = new Blob([data.buffer], { type: "video/mp4" });
   job.size = job.blob.size;
@@ -456,11 +512,14 @@ $("go").onclick = async () => {
   const { fetchFile } = window.FFmpegUtil;
   const preset = curPreset(), crf = $("crf").value;
   batchTotal = pending.length; batchDone = 0;
+  encMs = 0; encSec = 0; // recalibrate ETA for this run
 
   for (let i = 0; i < pending.length; i++) {
     const job = pending[i];
     batchDone = i;
-    setProgress(Math.round((i / batchTotal) * 100), "Processing " + (i + 1) + " of " + batchTotal + "…");
+    const eta = etaText();
+    const base = "Processing " + (i + 1) + " of " + batchTotal;
+    setProgress(Math.round((i / batchTotal) * 100), eta ? base + " · " + eta : base + "…");
     try {
       await processJob(job, fetchFile, preset, crf);
     } catch (err) {
@@ -484,8 +543,40 @@ function refreshControls() {
   $("go").textContent = running ? "Working…" : pending > 1 ? "Upscale " + pending + " videos" : "Upscale to 1080p";
   $("saveAll").style.display = doneN > 1 ? "block" : "none";
   $("saveAll").textContent = "⬇ Save all " + doneN + " to Photos / apps";
+  $("downloadAll").style.display = doneN > 1 ? "block" : "none";
+  $("downloadAll").textContent = "⬇ Download all " + doneN + " as .zip";
   $("saveNote").style.display = doneN >= 1 ? "block" : "none";
+  updateSummary();
 }
+
+function updateSummary() {
+  const n = jobs.length;
+  const tools = $("queueTools");
+  if (!n) { $("queueSummary").textContent = ""; tools.style.display = "none"; return; }
+  const doneN = jobs.filter((j) => j.status === "done").length;
+  const totDur = jobs.reduce((a, j) => a + (j.dur || 0), 0);
+  const totOut = jobs.filter((j) => j.status === "done").reduce((a, j) => a + (j.size || 0), 0);
+  let s = n + (n > 1 ? " videos" : " video");
+  if (totDur) s += " · " + fmtDur(totDur) + " total";
+  if (doneN) s += " · " + doneN + " done (" + fmtSize(totOut) + ")";
+  $("queueSummary").textContent = s;
+  tools.style.display = "flex";
+  $("clearDone").disabled = running || doneN === 0;
+  $("clearAll").disabled = running;
+}
+
+$("clearDone").onclick = () => {
+  if (running) return;
+  jobs = jobs.filter((j) => j.status !== "done");
+  $("previewWrap").style.display = "none";
+  renderQueue(); updatePresetHint(); refreshControls();
+};
+$("clearAll").onclick = () => {
+  if (running) return;
+  jobs = [];
+  $("previewWrap").style.display = "none";
+  renderQueue(); updatePresetHint(); refreshControls();
+};
 
 async function saveBlob(blob, name) {
   const f = new File([blob], name, { type: "video/mp4" });
@@ -506,6 +597,71 @@ $("saveAll").onclick = async () => {
     try { await navigator.share({ files, title: done.length + " videos (1080p)" }); return; } catch { return; }
   }
   for (const j of done) { await saveBlob(j.blob, j.outName); await new Promise((r) => setTimeout(r, 400)); }
+};
+
+// ---- Estimated time remaining, calibrated from real encode timings ----
+function etaText() {
+  if (encSec <= 0) return "";
+  const rate = encMs / encSec; // ms of encoding per source-second
+  let remSec = jobs.filter((j) => j.status === "queued" || j.status === "encoding").reduce((a, j) => a + (j.dur || 0), 0);
+  if (currentJob && currentJob.dur) remSec -= ((currentJob.progress || 0) / 100) * currentJob.dur;
+  const ms = remSec * rate;
+  if (ms <= 1000) return "";
+  const s = Math.round(ms / 1000);
+  return s < 60 ? "~" + s + "s left" : "~" + Math.ceil(s / 60) + " min left";
+}
+
+// ---- "Download all" as a single .zip (store, no compression) ----
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+function crc32(u8) { let c = ~0; for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xff] ^ (c >>> 8); return (~c) >>> 0; }
+
+async function buildZip(items) {
+  const enc = new TextEncoder();
+  const parts = [], central = []; let offset = 0;
+  for (const it of items) {
+    const data = new Uint8Array(await it.blob.arrayBuffer());
+    const nameB = enc.encode(it.name);
+    const crc = crc32(data), size = data.length;
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true);
+    lh.setUint32(14, crc, true); lh.setUint32(18, size, true); lh.setUint32(22, size, true);
+    lh.setUint16(26, nameB.length, true);
+    parts.push(new Uint8Array(lh.buffer), nameB, data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+    ch.setUint32(16, crc, true); ch.setUint32(20, size, true); ch.setUint32(24, size, true);
+    ch.setUint16(28, nameB.length, true); ch.setUint32(42, offset, true);
+    central.push(new Uint8Array(ch.buffer), nameB);
+    offset += 30 + nameB.length + size;
+  }
+  let cSize = 0; for (const p of central) cSize += p.length;
+  const eocd = new DataView(new ArrayBuffer(22));
+  eocd.setUint32(0, 0x06054b50, true);
+  eocd.setUint16(8, items.length, true); eocd.setUint16(10, items.length, true);
+  eocd.setUint32(12, cSize, true); eocd.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, new Uint8Array(eocd.buffer)], { type: "application/zip" });
+}
+
+$("downloadAll").onclick = async () => {
+  const done = jobs.filter((j) => j.status === "done" && j.blob);
+  if (!done.length) return;
+  const btn = $("downloadAll"), label = btn.textContent;
+  btn.disabled = true; btn.textContent = "Zipping…";
+  try {
+    const zip = await buildZip(done.map((j) => ({ name: j.outName, blob: j.blob })));
+    const url = URL.createObjectURL(zip);
+    const a = document.createElement("a");
+    a.href = url; a.download = "upscaled_1080p.zip"; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 20000);
+  } catch (e) {
+    fail("Couldn’t build the zip: " + (e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
 };
 
 function preview(job) {
@@ -533,9 +689,34 @@ function fail(msg) {
   $("errBox").textContent = "⚠ " + msg;
 }
 
-// Register service worker for offline / home-screen use.
+// Service worker: offline / home-screen use + "update available" prompt.
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+  const hadController = !!navigator.serviceWorker.controller;
+  let swRefreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (swRefreshing) return; swRefreshing = true;
+    if (hadController) location.reload(); // only auto-reload on a genuine update, not first install
+  });
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").then((reg) => {
+      if (reg.waiting && navigator.serviceWorker.controller) showUpdate(reg);
+      reg.addEventListener("updatefound", () => {
+        const nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener("statechange", () => {
+          if (nw.state === "installed" && navigator.serviceWorker.controller) showUpdate(reg);
+        });
+      });
+    }).catch(() => {});
+  });
+}
+function showUpdate(reg) {
+  const t = $("updateToast"); t.style.display = "flex";
+  $("updateBtn").onclick = () => {
+    t.style.display = "none";
+    if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+    else location.reload();
+  };
 }
 </script>
 </body>
