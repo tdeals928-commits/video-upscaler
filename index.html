@@ -189,6 +189,13 @@ function fmtSize(b) {
   while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
   return b.toFixed(b < 10 && i > 0 ? 1 : 0) + " " + u[i];
 }
+function fmtDur(s) {
+  if (!s || !isFinite(s)) return "";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+  const mm = h ? String(m).padStart(2, "0") : String(m);
+  return (h ? h + ":" : "") + mm + ":" + String(ss).padStart(2, "0");
+}
 
 // What a given preset will produce for a source of w×h.
 function autoTarget(w, h) {
@@ -232,10 +239,10 @@ function detectDims(f) {
   return new Promise((resolve) => {
     const v = document.createElement("video");
     v.preload = "metadata";
-    const done = (w, h) => { try { URL.revokeObjectURL(v.src); } catch {} resolve({ w, h }); };
-    v.onloadedmetadata = () => done(v.videoWidth, v.videoHeight);
-    v.onerror = () => done(0, 0);
-    setTimeout(() => done(0, 0), 5000);
+    const done = (w, h, d) => { try { URL.revokeObjectURL(v.src); } catch {} resolve({ w, h, d }); };
+    v.onloadedmetadata = () => done(v.videoWidth, v.videoHeight, v.duration);
+    v.onerror = () => done(0, 0, 0);
+    setTimeout(() => done(0, 0, 0), 5000);
     v.src = URL.createObjectURL(f);
   });
 }
@@ -249,10 +256,10 @@ function addFiles(list) {
     (f) => f && (f.type.startsWith("video") || /\.(mp4|mov|m4v|webm|mkv|avi|3gp)$/i.test(f.name))
   );
   for (const f of arr) {
-    const job = { id: idSeq++, file: f, name: f.name, w: 0, h: 0, status: "queued",
+    const job = { id: idSeq++, file: f, name: f.name, w: 0, h: 0, dur: 0, status: "queued",
                   blob: null, size: 0, dims: "", error: "", outName: safeBase(f.name) + "_1080p.mp4", el: null };
     jobs.push(job);
-    detectDims(f).then(({ w, h }) => { job.w = w; job.h = h; renderJob(job); updatePresetHint(); });
+    detectDims(f).then(({ w, h, d }) => { job.w = w; job.h = h; job.dur = d; renderJob(job); updatePresetHint(); });
   }
   renderQueue();
   updatePresetHint();
@@ -294,7 +301,8 @@ function renderJob(job) {
   if (job.status === "queued") {
     e.icon.textContent = "🎬";
     e.stat.style.color = "var(--muted)";
-    e.stat.textContent = job.w && job.h ? "Ready · " + fmtSize(job.file.size) + " → " + targetDims(curPreset(), job.w, job.h) : "Ready · " + fmtSize(job.file.size);
+    const meta = [fmtDur(job.dur), fmtSize(job.file.size)].filter(Boolean).join(" · ");
+    e.stat.textContent = job.w && job.h ? "Ready · " + meta + " → " + targetDims(curPreset(), job.w, job.h) : "Ready · " + meta;
     if (!running) {
       const rm = document.createElement("button"); rm.className = "qbtn"; rm.textContent = "✕"; rm.title = "Remove";
       rm.onclick = () => removeJob(job); e.actions.appendChild(rm);
@@ -307,7 +315,8 @@ function renderJob(job) {
     e.barWrap.style.display = "block"; e.bar.style.width = (job.progress || 0) + "%";
   } else if (job.status === "done") {
     e.icon.textContent = "✅";
-    e.stat.style.color = "var(--good)"; e.stat.textContent = "Done · " + (job.dims || "1080p") + " · " + fmtSize(job.size);
+    e.stat.style.color = "var(--good)";
+    e.stat.textContent = "Done · " + [fmtDur(job.dur), job.dims || "1080p", fmtSize(job.size)].filter(Boolean).join(" · ");
     const sv = document.createElement("button"); sv.className = "qbtn save"; sv.textContent = "Save";
     sv.onclick = () => saveBlob(job.blob, job.outName); e.actions.appendChild(sv);
     const pv = document.createElement("button"); pv.className = "qbtn"; pv.textContent = "▶"; pv.title = "Preview";
