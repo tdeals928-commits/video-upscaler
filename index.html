@@ -462,6 +462,27 @@ async function atlasPoll(id, onTick) {
     ? "Atlas still reports “processing” after 12 min — the job looks stuck on their side. Check prediction " + id + " on your atlascloud.ai dashboard (it may still finish and bill there), then try Generate again."
     : "Timed out after ~12 min — last status “" + (last || "(none)") + "” (prediction " + id + ")");
 }
+// Download the finished video. Atlas's result CDN sends no CORS headers, so a
+// direct browser fetch usually fails — fall back to a /fetch relay (the local
+// serve.js or the Cloudflare Worker), which downloads it server-side.
+async function fetchResultBlob(url) {
+  try {
+    const r = await fetch(url);
+    if (r.ok) return await r.blob();
+  } catch {}
+  const roots = [];
+  const base = atlasBase();
+  if (base !== ATLAS_DEFAULT) roots.push(base.replace(/\/api\/v1$/, "")); // user's relay (local or Worker)
+  if (!roots.includes(location.origin)) roots.push(location.origin);      // same-origin serve.js, if that's what's hosting us
+  for (const root of roots) {
+    try {
+      const r = await fetch(root + "/fetch?url=" + encodeURIComponent(url));
+      if (r.ok) { console.log("[atlas] result downloaded via relay:", root); return await r.blob(); }
+    } catch {}
+  }
+  throw new Error("The video was generated, but its CDN blocks browser downloads (no CORS). Set the Advanced endpoint to a relay — on the Mac run “node serve.js” and use http://localhost:4100/api/v1, or use your Cloudflare Worker (redeploy it with the latest cloudflare-worker.js, which adds the /fetch route).");
+}
+
 async function generateScene(scene, force) {
   if (!scene.image) { scene.error = "Add a first-frame photo first."; scene.genStatus = "error"; renderScene(scene); return; }
   scene.error = "";
@@ -481,10 +502,7 @@ async function generateScene(scene, force) {
     const id = await atlasGenerate(scene);
     scene.predId = id; scene.genStatus = "queued"; renderScene(scene);
     const url = await atlasPoll(id, (st, secs) => { scene.genStatus = st || "processing"; scene.genSecs = secs; renderScene(scene); });
-    let vr = await fetch(url); // output is usually a public CDN URL
-    if (vr.status === 401 || vr.status === 403) vr = await fetch(url, { headers: { Authorization: "Bearer " + getKey() } }); // …but auth it if needed
-    if (!vr.ok) throw new Error("Couldn’t fetch result video (" + vr.status + ")");
-    const vb = await vr.blob();
+    const vb = await fetchResultBlob(url);
     scene.video = new File([vb], "scene" + scene.id + ".mp4", { type: "video/mp4" });
     scene.fromCache = false;
     if (key) { await idbPut(key, scene.video); scene.videoKey = key; } // cache it so we never pay for this again

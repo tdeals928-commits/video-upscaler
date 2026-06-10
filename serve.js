@@ -61,8 +61,30 @@ async function relay(req, res) {
   }
 }
 
+// Download relay: /fetch?url=<encoded> — server-side fetch of Atlas result files
+// (their CDN sends no CORS headers, so the browser can't read them directly).
+async function fetchRelay(req, res) {
+  const cors = corsHeaders(req);
+  if (req.method === "OPTIONS") { res.writeHead(204, cors); return res.end(); }
+  let target;
+  try { target = new URL(new URL(req.url, "http://x").searchParams.get("url")); } catch { target = null; }
+  const okHost = target && target.protocol === "https:" &&
+    (/(^|\.)aliyuncs\.com$/.test(target.hostname) || /(^|\.)atlascloud\.ai$/.test(target.hostname));
+  if (!okHost) { res.writeHead(400, { ...cors, "Content-Type": "application/json" }); return res.end('{"error":"url must be an https atlas/aliyuncs link"}'); }
+  try {
+    const upstream = await fetch(target.href);
+    if (!upstream.ok) { res.writeHead(upstream.status, cors); return res.end(); }
+    res.writeHead(200, { ...cors, "Content-Type": upstream.headers.get("content-type") || "video/mp4" });
+    res.end(Buffer.from(await upstream.arrayBuffer()));
+  } catch (e) {
+    res.writeHead(502, { ...cors, "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "fetch relay failed: " + e.message }));
+  }
+}
+
 http.createServer((req, res) => {
   if (req.url.startsWith("/api/v1/")) return relay(req, res);
+  if (req.url.startsWith("/fetch?")) return fetchRelay(req, res);
 
   let rel = decodeURIComponent(req.url.split("?")[0]);
   if (rel === "/") rel = "/index.html";

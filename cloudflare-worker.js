@@ -24,6 +24,23 @@ export default {
       return new Response(null, { status: 204, headers: cors });
     }
 
+    // /fetch?url=<encoded> — download Atlas result files server-side (their CDN
+    // sends no CORS headers, so the browser can't read them directly).
+    if (url.pathname === "/fetch") {
+      let t; try { t = new URL(url.searchParams.get("url")); } catch { t = null; }
+      const okHost = t && t.protocol === "https:" &&
+        (/(^|\.)aliyuncs\.com$/.test(t.hostname) || /(^|\.)atlascloud\.ai$/.test(t.hostname));
+      if (!okHost) return new Response('{"error":"url must be an https atlas/aliyuncs link"}', { status: 400, headers: { ...cors, "Content-Type": "application/json" } });
+      try {
+        const up = await fetch(t.href);
+        const h = new Headers(); for (const [k, v] of Object.entries(cors)) h.set(k, v);
+        h.set("Content-Type", up.headers.get("content-type") || "video/mp4");
+        return new Response(up.body, { status: up.status, headers: h });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: "fetch relay failed: " + e.message }), { status: 502, headers: { ...cors, "Content-Type": "application/json" } });
+      }
+    }
+
     // Forward the same path/query to Atlas (e.g. /api/v1/model/uploadMedia)
     const target = ATLAS + url.pathname + url.search;
     const headers = new Headers();
