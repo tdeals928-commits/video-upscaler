@@ -179,6 +179,34 @@ async function thumbOf(file) {
   });
 }
 
+// Downscale big phone photos before upload — far more reliable + faster, and the
+// model only needs a reference frame (output is 480p anyway).
+async function compressImage(file, maxDim = 1280, quality = 0.85) {
+  if (!file || !(file.type || "").startsWith("image")) return file;
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
+    const w = img.naturalWidth, h = img.naturalHeight;
+    if (Math.max(w, h) <= maxDim && file.size < 1.5e6) { URL.revokeObjectURL(img.src); return file; }
+    const scale = Math.min(1, maxDim / Math.max(w, h));
+    const cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
+    const c = document.createElement("canvas"); c.width = cw; c.height = ch;
+    c.getContext("2d").drawImage(img, 0, 0, cw, ch);
+    URL.revokeObjectURL(img.src);
+    const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", quality));
+    if (!blob) return file;
+    return new File([blob], (file.name || "image").replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
+  } catch { return file; }
+}
+// Retry transient network failures (Failed to fetch) a couple of times.
+async function fetchRetry(url, opts, tries = 3) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try { return await fetch(url, opts); }
+    catch (e) { lastErr = e; if (i < tries - 1) await sleep(800 * (i + 1)); else throw e; }
+  }
+  throw lastErr;
+}
+
 // ---------- API key ----------
 function getKey() { return (localStorage.getItem("atlas_key") || "").trim(); }
 function refreshKeyStatus() {
@@ -208,21 +236,28 @@ function pickVideoUrl(o) { const u = collectUrls(o); return u.find((x) => /\.(mp
 function deepFindId(o) { if (!o || typeof o !== "object") return null; for (const k of ["id", "prediction_id", "predictionId", "task_id", "taskId", "request_id", "requestId", "uuid"]) if (o[k] != null && (typeof o[k] === "string" || typeof o[k] === "number")) return String(o[k]); if (o.data) return deepFindId(o.data); return null; }
 
 async function atlasUpload(file) {
-  const fd = new FormData(); fd.append("file", file, file.name || "upload");
-  const r = await fetch(ATLAS + "/model/uploadMedia", { method: "POST", headers: { Authorization: "Bearer " + getKey() }, body: fd });
-  const text = await r.text();
-  if (!r.ok) throw new Error("Upload failed (" + r.status + "): " + text.slice(0, 200));
-  let j; try { j = JSON.parse(text); } catch { if (/^https?:\/\//i.test(text.trim())) return text.trim(); throw new Error("Upload returned non-JSON: " + text.slice(0, 160)); }
-  const url = deepFindUrl(j);
-  if (!url) throw new Error("Upload: no URL in response → " + JSON.stringify(j).slice(0, 220));
-  return url;
+  const f = await compressImage(file);
+  let lastErr;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const fd = new FormData(); fd.append("file", f, f.name || "upload"); // rebuilt per attempt
+      const r = await fetch(ATLAS + "/model/uploadMedia", { method: "POST", headers: { Authorization: "Bearer " + getKey() }, body: fd });
+      const text = await r.text();
+      if (!r.ok) throw new Error("Upload failed (" + r.status + "): " + text.slice(0, 200));
+      let j; try { j = JSON.parse(text); } catch { if (/^https?:\/\//i.test(text.trim())) return text.trim(); throw new Error("Upload returned non-JSON: " + text.slice(0, 160)); }
+      const url = deepFindUrl(j);
+      if (!url) throw new Error("Upload: no URL in response → " + JSON.stringify(j).slice(0, 220));
+      return url;
+    } catch (e) { lastErr = e; if (e instanceof TypeError && i < 2) { await sleep(800 * (i + 1)); continue; } throw e; }
+  }
+  throw lastErr;
 }
 async function atlasGenerate(scene) {
   const imageUrl = await atlasUpload(scene.image);
   const body = { model: MODEL, prompt: scene.prompt || "", image: imageUrl,
                  aspect_ratio: "9:16", duration: 8, resolution: "480p", generate_audio: true };
   if (scene.refImage) { try { body.last_image = await atlasUpload(scene.refImage); } catch {} }
-  const r = await fetch(ATLAS + "/model/generateVideo", { method: "POST", headers: { Authorization: "Bearer " + getKey(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const r = await fetchRetry(ATLAS + "/model/generateVideo", { method: "POST", headers: { Authorization: "Bearer " + getKey(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const text = await r.text();
   if (!r.ok) throw new Error("Generate failed (" + r.status + "): " + text.slice(0, 240));
   let j; try { j = JSON.parse(text); } catch { throw new Error("Generate returned non-JSON: " + text.slice(0, 160)); }
@@ -234,7 +269,7 @@ async function atlasPoll(id, onTick) {
   const started = Date.now();
   for (;;) {
     await sleep(4000);
-    const r = await fetch(ATLAS + "/model/prediction/" + id, { headers: { Authorization: "Bearer " + getKey() } });
+    const r = await fetchRetry(ATLAS + "/model/prediction/" + id, { headers: { Authorization: "Bearer " + getKey() } });
     if (!r.ok) { if (r.status === 404) continue; throw new Error("Status failed (" + r.status + ")"); }
     const j = await r.json(); const d = j.data || j;
     const st = (d.status || "").toLowerCase();
@@ -258,7 +293,9 @@ async function generateScene(scene) {
     scene.videoThumb = await thumbOf(scene.video);
     scene.genStatus = "done"; renderScene(scene);
   } catch (e) {
-    scene.error = (e && e.message) ? e.message : String(e); scene.genStatus = "error"; renderScene(scene);
+    let m = (e && e.message) ? e.message : String(e);
+    if (/failed to fetch|networkerror|load failed/i.test(m)) m = "Network error reaching Atlas. Check your connection, and disable any content/ad blockers for atlascloud.ai, then retry.";
+    scene.error = m; scene.genStatus = "error"; renderScene(scene);
   }
   refreshBuild();
 }
@@ -279,11 +316,11 @@ function makeDrop(sc, field, thumbField, label, accept) {
     if (t) {
       const im = document.createElement("img"); im.src = t; d.appendChild(im);
       const cl = document.createElement("button"); cl.className = "clear"; cl.textContent = "✕";
-      cl.onclick = (e) => { e.stopPropagation(); sc[field] = null; sc[thumbField] = null; paint(); refreshBuild(); };
+      cl.onclick = (e) => { e.stopPropagation(); sc[field] = null; sc[thumbField] = null; paint(); refreshBuild(); if (sc.el) renderScene(sc); };
       d.appendChild(cl); lbl.style.display = "none";
     } else lbl.style.display = "";
   };
-  const setFile = async (f) => { if (!f) return; sc[field] = f; sc[thumbField] = await thumbOf(f); paint(); refreshBuild(); };
+  const setFile = async (f) => { if (!f) return; sc[field] = f; sc[thumbField] = await thumbOf(f); paint(); refreshBuild(); if (sc.el) renderScene(sc); };
   d.onclick = () => inp.click();
   inp.onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; setFile(f); };
   ["dragover", "dragenter"].forEach((ev) => d.addEventListener(ev, (e) => { e.preventDefault(); d.style.borderColor = "var(--accent)"; }));
