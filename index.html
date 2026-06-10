@@ -64,6 +64,12 @@
   .scnpreview { width: 92px; flex-shrink: 0; }
   .scnvid { width: 92px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); background: #000; display: none; }
   .scnph { width: 92px; aspect-ratio: 9 / 16; border: 1px dashed var(--border); border-radius: 8px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 10px; color: var(--muted); padding: 4px; }
+  .scnpreview.pvbox { position: relative; cursor: pointer; }
+  .pvexpand { position: absolute; right: 4px; bottom: 4px; width: 22px; height: 22px; border-radius: 6px; background: rgba(0,0,0,.62); color: #fff; font-size: 12px; display: none; align-items: center; justify-content: center; pointer-events: none; }
+  .modal { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.86); display: none; align-items: center; justify-content: center; padding: 24px; }
+  .modal.open { display: flex; }
+  .modal video { max-width: 100%; max-height: 84vh; border-radius: 12px; background: #000; }
+  .mclose { position: absolute; top: calc(14px + env(safe-area-inset-top)); right: 16px; width: 40px; height: 40px; margin: 0; padding: 0; border-radius: 50%; background: #1b2430; border: 1px solid var(--border); color: #fff; font-size: 18px; }
   .progress-wrap { display: none; margin-top: 14px; }
   .bar { height: 10px; background: #0d1117; border: 1px solid var(--border); border-radius: 99px; overflow: hidden; }
   .bar > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--good)); transition: width .2s; }
@@ -137,6 +143,11 @@
 
 <div class="toast" id="updateToast" style="display:none">
   <span>🎉 New version available</span><button id="updateBtn" type="button">Refresh</button>
+</div>
+
+<div class="modal" id="pvModal">
+  <button class="mclose" id="pvClose" type="button">✕</button>
+  <video id="pvVideo" controls playsinline></video>
 </div>
 
 <script src="vendor/ffmpeg.js"></script>
@@ -301,15 +312,17 @@ function renderScenes() {
     const body = document.createElement("div"); body.className = "scenebody";
     const mainCol = document.createElement("div"); mainCol.className = "scnmain";
     mainCol.append(drops, ta, actions, bar, stat);
-    const preview = document.createElement("div"); preview.className = "scnpreview";
+    const preview = document.createElement("div"); preview.className = "scnpreview pvbox";
     const ph = document.createElement("div"); ph.className = "scnph"; ph.textContent = "Preview";
-    const vid = document.createElement("video"); vid.className = "scnvid"; vid.controls = true; vid.playsInline = true;
-    preview.append(ph, vid);
+    const vid = document.createElement("video"); vid.className = "scnvid"; vid.muted = true; vid.playsInline = true; // thumbnail; tap to open
+    const expand = document.createElement("div"); expand.className = "pvexpand"; expand.textContent = "⤢";
+    preview.append(ph, vid, expand);
+    preview.onclick = () => openPreview(sc);
     body.append(mainCol, preview);
 
     card.append(head, body);
     c.appendChild(card);
-    sc.el = { gen, stat, bar, vid, ph };
+    sc.el = { gen, stat, bar, vid, ph, expand };
     renderScene(sc);
   });
 }
@@ -324,17 +337,30 @@ function renderScene(sc) {
     e.stat.className = "scnstatus ok";
     e.stat.textContent = "✓ Clip ready · " + fmtSize(sc.video.size);
     if (!e.vid.src) e.vid.src = URL.createObjectURL(sc.video);
-    e.vid.style.display = "block"; e.ph.style.display = "none"; e.gen.textContent = "✨ Re-generate";
+    e.vid.style.display = "block"; e.ph.style.display = "none"; e.expand.style.display = "flex"; e.gen.textContent = "✨ Re-generate";
   } else if (sc.genStatus === "error") {
-    e.stat.className = "scnstatus bad"; e.stat.textContent = "⚠ " + (sc.error || "Failed"); e.vid.style.display = "none"; e.ph.style.display = "";
+    e.stat.className = "scnstatus bad"; e.stat.textContent = "⚠ " + (sc.error || "Failed"); e.vid.style.display = "none"; e.ph.style.display = ""; e.expand.style.display = "none";
   } else if (busy) {
     const map = { uploading: "Uploading image…", queued: "Queued…", processing: "Generating…", starting: "Starting…", running: "Generating…" };
     e.stat.className = "scnstatus"; e.stat.textContent = (map[sc.genStatus] || "Working…") + (sc.genSecs ? " (" + sc.genSecs + "s)" : "");
-    e.vid.style.display = "none"; e.ph.style.display = "";
-  } else { e.stat.className = "scnstatus"; e.stat.textContent = ""; e.vid.style.display = "none"; e.ph.style.display = ""; }
+    e.vid.style.display = "none"; e.ph.style.display = ""; e.expand.style.display = "none";
+  } else { e.stat.className = "scnstatus"; e.stat.textContent = ""; e.vid.style.display = "none"; e.ph.style.display = ""; e.expand.style.display = "none"; }
 }
 
 $("addScene").onclick = addScene;
+
+// ---------- tap-to-open preview lightbox ----------
+function openPreview(sc) {
+  if (!sc.video) return;
+  const m = $("pvModal"), v = $("pvVideo");
+  v.src = (sc.el && sc.el.vid && sc.el.vid.src) ? sc.el.vid.src : URL.createObjectURL(sc.video);
+  m.classList.add("open");
+  v.currentTime = 0; v.play().catch(() => {});
+}
+function closePreview() { const v = $("pvVideo"); $("pvModal").classList.remove("open"); v.pause(); }
+$("pvClose").onclick = closePreview;
+$("pvModal").onclick = (e) => { if (e.target === $("pvModal")) closePreview(); };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePreview(); });
 
 // ---------- music ----------
 $("musicDrop").onclick = () => $("musicInput").click();
