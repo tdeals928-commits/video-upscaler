@@ -92,6 +92,17 @@
            display: flex; align-items: center; gap: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.5); max-width: 92vw; }
   .toast span { font-size: 13px; color: var(--text); }
   .toast button { width: auto; margin: 0; padding: 8px 14px; font-size: 13px; border-radius: 8px; }
+  .modebar { display: flex; gap: 6px; background: #0d1117; border: 1px solid var(--border); border-radius: 10px; padding: 4px; margin-top: 16px; }
+  .modebar button { flex: 1; width: auto; margin: 0; padding: 10px 8px; font-size: 13px; font-weight: 600; border-radius: 7px; background: none; color: var(--muted); border: none; }
+  .modebar button.active { background: var(--accent-2); color: #fff; }
+  .qtrim { display: none; margin-top: 8px; padding: 10px; background: #0d1117; border: 1px solid var(--border); border-radius: 8px; }
+  .qtrimrow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .qtrimrow input[type=range] { flex: 1; accent-color: var(--accent); }
+  .qtrimrow span { width: 34px; flex-shrink: 0; }
+  .qtrimlbl { font-size: 12px; color: var(--text); margin-top: 2px; }
+  .qord { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+  .qord button { width: 26px; margin: 0; padding: 2px 0; font-size: 12px; line-height: 1.2; background: #1f2630; color: var(--text); border: 1px solid var(--border); border-radius: 5px; }
+  .qord button:disabled { opacity: .35; }
 </style>
 </head>
 <body>
@@ -117,6 +128,11 @@
       <div class="big">Tap to choose videos</div>
       <div class="small">one or many — from Photos or Files (MP4, MOV, …)</div>
       <input id="fileInput" type="file" accept="video/*" multiple hidden />
+    </div>
+
+    <div class="modebar" id="modebar">
+      <button id="modeEach" class="active">Upscale each</button>
+      <button id="modeAssemble">Stitch into one</button>
     </div>
 
     <div id="queue"></div>
@@ -160,6 +176,12 @@
     <button class="ghost" id="downloadAll" style="display:none">⬇ Download all as .zip</button>
     <div class="note" id="saveNote" style="display:none"><b>Save</b> opens the Share sheet (choose <b>Save Video</b> → Photos, or send to an app). <b>Download .zip</b> saves one file with every clip (goes to Files / Downloads). On big batches, saving one at a time is most reliable.</div>
 
+    <div id="asmResult" style="display:none">
+      <div class="ok" id="asmOk" style="margin-top:18px"></div>
+      <button class="save" id="asmSave">⬇ Save to Photos / apps</button>
+      <button class="ghost" id="asmDownload">⬇ Download .mp4</button>
+    </div>
+
     <div class="result" id="previewWrap" style="display:none">
       <video id="outVideo" controls playsinline></video>
     </div>
@@ -185,6 +207,7 @@ let ffmpeg = null, engineReady = false;
 let jobs = [], idSeq = 1, running = false;
 let currentJob = null, batchDone = 0, batchTotal = 0;
 let encMs = 0, encSec = 0; // for ETA: accumulated encode time vs source seconds
+let mode = "each", assembledBlob = null; // "each" = upscale separately, "assemble" = stitch into one
 
 function copyURL(text, btn) {
   const flash = (msg) => {
@@ -257,6 +280,12 @@ function curPreset() { return $("preset").value; }
 
 function updatePresetHint() {
   const p = curPreset();
+  if (mode === "assemble") {
+    const cp = (p === "auto" || p === "fit") ? "landscape" : p;
+    const dimsMap = { landscape: "1920×1080", portrait: "1080×1920", square: "1080×1080" };
+    $("presetHint").textContent = "All clips placed on one " + dimsMap[cp] + " canvas (different-shaped clips get black bars).";
+    return;
+  }
   if (p === "auto") {
     const ready = jobs.filter((j) => j.w && j.h);
     if (jobs.length === 1 && ready.length === 1) {
@@ -287,6 +316,152 @@ function loadSettings() {
   $("crfHint").textContent = crfHints[$("crf").value];
 }
 loadSettings();
+
+// ---- Mode: "Upscale each" vs "Stitch into one" ----
+function setMode(m) {
+  mode = m;
+  $("modeEach").classList.toggle("active", m === "each");
+  $("modeAssemble").classList.toggle("active", m === "assemble");
+  $("asmResult").style.display = "none";
+  $("saveAll").style.display = $("downloadAll").style.display = $("saveNote").style.display = "none";
+  $("previewWrap").style.display = "none";
+  renderQueue(); updatePresetHint(); refreshControls();
+}
+$("modeEach").onclick = () => setMode("each");
+$("modeAssemble").onclick = () => setMode("assemble");
+
+function trimmedLen(job) {
+  if (!job.dur) return 0;
+  const s = job.trimStart || 0, e = (job.trimEnd != null ? job.trimEnd : job.dur);
+  return Math.max(0, e - s);
+}
+function moveJob(job, dir) {
+  const i = jobs.indexOf(job), j = i + dir;
+  if (j < 0 || j >= jobs.length) return;
+  jobs[i] = jobs[j]; jobs[j] = job;
+  renderQueue(); refreshControls();
+}
+function toggleTrim(job) { job.trimOpen = !job.trimOpen; if (job.trimOpen) buildTrim(job); renderJob(job); }
+function buildTrim(job) {
+  const t = job.el.trim; t.innerHTML = "";
+  const dur = job.dur || 0;
+  if (!dur) { t.textContent = "Length unknown — can’t trim this clip."; return; }
+  if (job.trimEnd == null) job.trimEnd = dur;
+  const mk = (val) => { const r = document.createElement("input"); r.type = "range"; r.min = 0; r.max = dur; r.step = 0.1; r.value = val; return r; };
+  const s = mk(job.trimStart || 0), e = mk(job.trimEnd);
+  const lbl = document.createElement("div"); lbl.className = "qtrimlbl";
+  const upd = (which) => {
+    let a = parseFloat(s.value), b = parseFloat(e.value);
+    if (b - a < 0.1) { if (which === "s") { a = Math.min(a, dur - 0.1); b = a + 0.1; } else { b = Math.max(b, 0.1); a = b - 0.1; } s.value = a; e.value = b; }
+    job.trimStart = a; job.trimEnd = b;
+    lbl.textContent = "Start " + fmtDur(a) + "  ·  End " + fmtDur(b) + "  ·  Keeps " + fmtDur(b - a);
+    const trimmed = Math.abs((b - a) - dur) > 0.05;
+    job.el.stat.style.color = "var(--muted)";
+    job.el.stat.textContent = trimmed ? "Length " + fmtDur(b - a) + " (trimmed from " + fmtDur(dur) + ")" : fmtDur(dur) + " · full";
+    updateSummary();
+  };
+  s.oninput = () => upd("s"); e.oninput = () => upd("e");
+  const row = (label, input) => { const l = document.createElement("label"); l.className = "qtrimrow"; const sp = document.createElement("span"); sp.textContent = label; l.append(sp, input); return l; };
+  t.append(row("Start", s), row("End", e), lbl); upd("init");
+}
+
+// Probe whether a clip in the FS has an audio stream (so stitching can add silence if not).
+async function probeHasAudio(name) {
+  const buf = []; const handler = ({ message }) => buf.push(message);
+  ffmpeg.on("log", handler);
+  try { await ffmpeg.exec(["-i", name]); } catch {}
+  ffmpeg.off("log", handler);
+  return buf.some((m) => /Stream #\d+:\d+.*Audio:/i.test(m));
+}
+
+function reenable() { $("preset").disabled = $("crf").disabled = false; $("modeEach").disabled = $("modeAssemble").disabled = false; }
+async function cleanupSegs(segs) { for (const s of segs) { try { await ffmpeg.deleteFile(s); } catch {} } }
+
+async function assembleAll() {
+  if (running) return;
+  if (jobs.length < 2) { fail("Add at least 2 clips to stitch (use ‘Upscale each’ for a single clip)."); return; }
+  running = true;
+  $("preset").disabled = $("crf").disabled = true; $("modeEach").disabled = $("modeAssemble").disabled = true;
+  $("errBox").style.display = $("asmResult").style.display = $("previewWrap").style.display = "none";
+  $("progWrap").style.display = "block";
+  assembledBlob = null;
+  renderQueue(); refreshControls();
+  setProgress(0, "Loading engine…");
+  try { await loadEngine(); } catch (e) { fail("Couldn’t load the video engine: " + (e.message || e)); running = false; reenable(); refreshControls(); return; }
+
+  const { fetchFile } = window.FFmpegUtil;
+  let preset = curPreset(); if (preset === "auto" || preset === "fit") preset = "landscape";
+  const [W, H] = { landscape: [1920, 1080], portrait: [1080, 1920], square: [1080, 1080] }[preset];
+  const crf = $("crf").value;
+  const N = jobs.length;
+  const segs = []; let totalLen = 0;
+  batchTotal = N; encMs = 0; encSec = 0;
+
+  for (let i = 0; i < N; i++) {
+    const job = jobs[i];
+    batchDone = i;
+    setProgress(Math.round((i / N) * 100), "Preparing clip " + (i + 1) + " of " + N + "…");
+    job.status = "encoding"; job.progress = 0; renderJob(job); currentJob = job;
+    const inName = "asm_in_" + job.id + ".mp4", seg = "asm_" + i + ".ts";
+    const start = job.trimStart || 0, len = trimmedLen(job) || job.dur || 0;
+    try {
+      await ffmpeg.writeFile(inName, await fetchFile(job.file));
+      const hasAudio = await probeHasAudio(inName);
+      const vf = `[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v]`;
+      const ss = start > 0 ? ["-ss", String(start)] : [];
+      const t = len > 0 ? ["-t", String(len)] : [];
+      const tail = ["-c:v", "libx264", "-crf", String(crf), "-preset", "medium", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-f", "mpegts", seg];
+      const args = hasAudio
+        ? [...ss, ...t, "-i", inName, "-filter_complex", vf + ";[0:a]aresample=48000,aformat=channel_layouts=stereo[a]", "-map", "[v]", "-map", "[a]", ...tail]
+        : [...ss, ...t, "-i", inName, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", vf, "-map", "[v]", "-map", "1:a", "-shortest", ...tail];
+      await ffmpeg.exec(args);
+      segs.push(seg); totalLen += len;
+      job.status = "queued";
+    } catch (e) {
+      job.status = "error"; job.error = friendlyErr(e);
+    } finally {
+      currentJob = null; renderJob(job);
+      try { await ffmpeg.deleteFile(inName); } catch {}
+    }
+  }
+
+  if (segs.length < 2) {
+    await cleanupSegs(segs);
+    fail("Couldn’t prepare enough clips to stitch (need at least 2 that work).");
+    running = false; reenable(); jobs.forEach((j) => { if (j.status !== "error") j.status = "queued"; }); renderQueue(); refreshControls(); return;
+  }
+
+  setProgress(98, "Stitching " + segs.length + " clips together…");
+  try {
+    await ffmpeg.writeFile("asm_list.txt", segs.map((s) => "file '" + s + "'").join("\n") + "\n");
+    await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "asm_list.txt", "-c", "copy", "-movflags", "+faststart", "assembled.mp4"]);
+    const data = await ffmpeg.readFile("assembled.mp4");
+    assembledBlob = new Blob([data.buffer], { type: "video/mp4" });
+  } catch (e) {
+    await cleanupSegs(segs); fail("Couldn’t stitch the clips: " + (e.message || e));
+    running = false; reenable(); renderQueue(); refreshControls(); return;
+  }
+  await cleanupSegs(segs);
+  try { await ffmpeg.deleteFile("asm_list.txt"); await ffmpeg.deleteFile("assembled.mp4"); } catch {}
+
+  setProgress(100, "Done");
+  $("asmOk").textContent = "✓ Stitched " + segs.length + " clips — " + fmtDur(totalLen) + " · " + W + "×" + H + " · " + fmtSize(assembledBlob.size);
+  $("asmResult").style.display = "block";
+  $("outVideo").src = URL.createObjectURL(assembledBlob);
+  $("previewWrap").style.display = "block";
+  running = false; reenable();
+  jobs.forEach((j) => { if (j.status !== "error") j.status = "queued"; });
+  renderQueue(); refreshControls();
+}
+
+$("asmSave").onclick = () => { if (assembledBlob) saveBlob(assembledBlob, "stitched_1080p.mp4"); };
+$("asmDownload").onclick = () => {
+  if (!assembledBlob) return;
+  const url = URL.createObjectURL(assembledBlob);
+  const a = document.createElement("a"); a.href = url; a.download = "stitched_1080p.mp4";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 20000);
+};
 
 // Read a video's dimensions/duration AND grab a thumbnail frame, in one decode.
 // onMeta fires early (as soon as w/h/duration are known) so the row updates
@@ -331,11 +506,13 @@ function addFiles(list) {
   );
   for (const f of arr) {
     const job = { id: idSeq++, file: f, name: f.name, w: 0, h: 0, dur: 0, thumb: null, status: "queued",
-                  blob: null, size: 0, dims: "", error: "", outName: safeBase(f.name) + "_1080p.mp4", el: null };
+                  blob: null, size: 0, dims: "", error: "", outName: safeBase(f.name) + "_1080p.mp4", el: null,
+                  trimStart: 0, trimEnd: null, trimOpen: false };
     jobs.push(job);
     probe(f, (w, h, d) => { job.w = w; job.h = h; job.dur = d; renderJob(job); updatePresetHint(); updateSummary(); })
       .then(({ thumb }) => { job.thumb = thumb; renderJob(job); });
   }
+  if (mode === "assemble") { $("asmResult").style.display = "none"; assembledBlob = null; }
   renderQueue();
   updatePresetHint();
   refreshControls();
@@ -360,12 +537,14 @@ function renderQueue() {
     const stat = document.createElement("div"); stat.className = "qstat";
     const barWrap = document.createElement("div"); barWrap.className = "qbar";
     const bar = document.createElement("div"); barWrap.appendChild(bar);
-    main.append(name, stat, barWrap);
+    const trim = document.createElement("div"); trim.className = "qtrim";
+    main.append(name, stat, barWrap, trim);
     const actions = document.createElement("div"); actions.className = "qactions";
     row.append(icon, main, actions);
     q.appendChild(row);
-    job.el = { icon, stat, barWrap, bar, actions };
+    job.el = { icon, stat, barWrap, bar, actions, trim };
     renderJob(job);
+    if (mode === "assemble" && job.trimOpen && job.dur) buildTrim(job);
   }
 }
 
@@ -385,30 +564,51 @@ function renderJob(job) {
   e.actions.innerHTML = "";
   e.barWrap.style.display = "none";
   setIcon(e, job);
-  if (job.status === "queued") {
-    e.stat.style.color = "var(--muted)";
-    const meta = [fmtDur(job.dur), fmtSize(job.file.size)].filter(Boolean).join(" · ");
-    e.stat.textContent = job.w && job.h ? "Ready · " + meta + " → " + targetDims(curPreset(), job.w, job.h) : "Ready · " + meta;
-    if (!running) {
-      const rm = document.createElement("button"); rm.className = "qbtn"; rm.textContent = "✕"; rm.title = "Remove";
-      rm.onclick = () => removeJob(job); e.actions.appendChild(rm);
-    }
-  } else if (job.status === "reading") {
+
+  // ---- status / progress text ----
+  if (job.status === "reading") {
     e.stat.style.color = "var(--muted)"; e.stat.textContent = "Reading…";
     e.barWrap.style.display = "block"; e.bar.style.width = "4%";
   } else if (job.status === "encoding") {
-    e.stat.style.color = "var(--muted)"; e.stat.textContent = "Encoding… " + (job.progress || 0) + "%";
+    e.stat.style.color = "var(--muted)"; e.stat.textContent = (mode === "assemble" ? "Preparing… " : "Encoding… ") + (job.progress || 0) + "%";
     e.barWrap.style.display = "block"; e.bar.style.width = (job.progress || 0) + "%";
-  } else if (job.status === "done") {
-    e.stat.style.color = "var(--good)";
-    e.stat.textContent = "Done · " + [fmtDur(job.dur), job.dims || "1080p", fmtSize(job.size)].filter(Boolean).join(" · ");
-    const sv = document.createElement("button"); sv.className = "qbtn save"; sv.textContent = "Save";
-    sv.onclick = () => saveBlob(job.blob, job.outName); e.actions.appendChild(sv);
-    const pv = document.createElement("button"); pv.className = "qbtn"; pv.textContent = "▶"; pv.title = "Preview";
-    pv.onclick = () => preview(job); e.actions.appendChild(pv);
   } else if (job.status === "error") {
     e.stat.style.color = "var(--bad)"; e.stat.textContent = job.error || "Failed";
+  } else if (job.status === "done" && mode === "each") {
+    e.stat.style.color = "var(--good)";
+    e.stat.textContent = "Done · " + [fmtDur(job.dur), job.dims || "1080p", fmtSize(job.size)].filter(Boolean).join(" · ");
+  } else { // queued (or assemble segments between runs)
+    e.stat.style.color = "var(--muted)";
+    if (mode === "assemble") {
+      const len = trimmedLen(job), trimmed = job.dur && Math.abs(len - job.dur) > 0.05;
+      e.stat.textContent = job.dur ? (trimmed ? "Length " + fmtDur(len) + " (trimmed from " + fmtDur(job.dur) + ")" : fmtDur(job.dur) + " · full") : "Ready";
+    } else {
+      const meta = [fmtDur(job.dur), fmtSize(job.file.size)].filter(Boolean).join(" · ");
+      e.stat.textContent = job.w && job.h ? "Ready · " + meta + " → " + targetDims(curPreset(), job.w, job.h) : "Ready · " + meta;
+    }
   }
+
+  // ---- action buttons ----
+  if (!running) {
+    if (mode === "assemble" && job.status !== "encoding" && job.status !== "reading") {
+      const ord = document.createElement("div"); ord.className = "qord";
+      const up = document.createElement("button"); up.textContent = "▲"; up.title = "Move up"; up.disabled = jobs.indexOf(job) === 0; up.onclick = () => moveJob(job, -1);
+      const dn = document.createElement("button"); dn.textContent = "▼"; dn.title = "Move down"; dn.disabled = jobs.indexOf(job) === jobs.length - 1; dn.onclick = () => moveJob(job, 1);
+      ord.append(up, dn);
+      const tr = document.createElement("button"); tr.className = "qbtn"; tr.textContent = "Trim"; tr.onclick = () => toggleTrim(job);
+      const rm = document.createElement("button"); rm.className = "qbtn"; rm.textContent = "✕"; rm.title = "Remove"; rm.onclick = () => removeJob(job);
+      e.actions.append(ord, tr, rm);
+    } else if (mode === "each") {
+      if (job.status === "done") {
+        const sv = document.createElement("button"); sv.className = "qbtn save"; sv.textContent = "Save"; sv.onclick = () => saveBlob(job.blob, job.outName); e.actions.appendChild(sv);
+        const pv = document.createElement("button"); pv.className = "qbtn"; pv.textContent = "▶"; pv.title = "Preview"; pv.onclick = () => preview(job); e.actions.appendChild(pv);
+      } else {
+        const rm = document.createElement("button"); rm.className = "qbtn"; rm.textContent = "✕"; rm.title = "Remove"; rm.onclick = () => removeJob(job); e.actions.appendChild(rm);
+      }
+    }
+  }
+
+  if (e.trim) e.trim.style.display = (mode === "assemble" && job.trimOpen && job.dur) ? "block" : "none";
 }
 
 $("drop").onclick = () => $("fileInput").click();
@@ -491,8 +691,10 @@ async function processJob(job, fetchFile, preset, crf) {
 }
 
 $("go").onclick = async () => {
+  if (running) return;
+  if (mode === "assemble") return assembleAll();
   const pending = jobs.filter((j) => j.status === "queued" || j.status === "error");
-  if (running || !pending.length) return;
+  if (!pending.length) return;
   running = true;
   $("preset").disabled = $("crf").disabled = true;
   $("errBox").style.display = "none";
@@ -539,13 +741,20 @@ $("go").onclick = async () => {
 function refreshControls() {
   const pending = jobs.filter((j) => j.status === "queued" || j.status === "error").length;
   const doneN = jobs.filter((j) => j.status === "done").length;
-  $("go").disabled = running || pending === 0;
-  $("go").textContent = running ? "Working…" : pending > 1 ? "Upscale " + pending + " videos" : "Upscale to 1080p";
-  $("saveAll").style.display = doneN > 1 ? "block" : "none";
-  $("saveAll").textContent = "⬇ Save all " + doneN + " to Photos / apps";
-  $("downloadAll").style.display = doneN > 1 ? "block" : "none";
-  $("downloadAll").textContent = "⬇ Download all " + doneN + " as .zip";
-  $("saveNote").style.display = doneN >= 1 ? "block" : "none";
+  if (mode === "assemble") {
+    $("go").disabled = running || jobs.length < 2;
+    $("go").textContent = running ? "Working…" : "Stitch " + jobs.length + " clips → 1080p";
+    $("saveAll").style.display = $("downloadAll").style.display = $("saveNote").style.display = "none";
+  } else {
+    $("go").disabled = running || pending === 0;
+    $("go").textContent = running ? "Working…" : pending > 1 ? "Upscale " + pending + " videos" : "Upscale to 1080p";
+    $("saveAll").style.display = doneN > 1 ? "block" : "none";
+    $("saveAll").textContent = "⬇ Save all " + doneN + " to Photos / apps";
+    $("downloadAll").style.display = doneN > 1 ? "block" : "none";
+    $("downloadAll").textContent = "⬇ Download all " + doneN + " as .zip";
+    $("saveNote").style.display = doneN >= 1 ? "block" : "none";
+    $("asmResult").style.display = "none";
+  }
   updateSummary();
 }
 
@@ -553,6 +762,17 @@ function updateSummary() {
   const n = jobs.length;
   const tools = $("queueTools");
   if (!n) { $("queueSummary").textContent = ""; tools.style.display = "none"; return; }
+  tools.style.display = "flex";
+  $("clearAll").disabled = running;
+  if (mode === "assemble") {
+    $("clearDone").style.display = "none";
+    const totLen = jobs.reduce((a, j) => a + (trimmedLen(j) || j.dur || 0), 0);
+    let s = n + (n > 1 ? " clips" : " clip");
+    if (totLen) s += " · final ≈ " + fmtDur(totLen);
+    $("queueSummary").textContent = s;
+    return;
+  }
+  $("clearDone").style.display = "";
   const doneN = jobs.filter((j) => j.status === "done").length;
   const totDur = jobs.reduce((a, j) => a + (j.dur || 0), 0);
   const totOut = jobs.filter((j) => j.status === "done").reduce((a, j) => a + (j.size || 0), 0);
@@ -560,9 +780,7 @@ function updateSummary() {
   if (totDur) s += " · " + fmtDur(totDur) + " total";
   if (doneN) s += " · " + doneN + " done (" + fmtSize(totOut) + ")";
   $("queueSummary").textContent = s;
-  tools.style.display = "flex";
   $("clearDone").disabled = running || doneN === 0;
-  $("clearAll").disabled = running;
 }
 
 $("clearDone").onclick = () => {
@@ -574,7 +792,9 @@ $("clearDone").onclick = () => {
 $("clearAll").onclick = () => {
   if (running) return;
   jobs = [];
+  assembledBlob = null;
   $("previewWrap").style.display = "none";
+  $("asmResult").style.display = "none";
   renderQueue(); updatePresetHint(); refreshControls();
 };
 
