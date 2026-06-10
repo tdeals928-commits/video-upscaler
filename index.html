@@ -382,6 +382,7 @@ async function atlasGenerate(scene, onSize) {
       }
       let j; try { j = JSON.parse(text); } catch { throw new Error("Generate returned non-JSON: " + text.slice(0, 160)); }
       const id = deepFindId(j);
+      console.log("[atlas] submit response", JSON.stringify(j).slice(0, 300), "→ extracted id:", id);
       if (!id) throw new Error("No prediction id in response → " + JSON.stringify(j).slice(0, 220));
       return id;
     } catch (e) {
@@ -393,17 +394,33 @@ async function atlasGenerate(scene, onSize) {
 }
 async function atlasPoll(id, onTick) {
   const started = Date.now();
+  const DONE = ["completed", "succeeded", "success", "done", "finished", "ready"];
+  const FAIL = ["failed", "error", "canceled", "cancelled", "rejected"];
+  let last = "", notFound = 0;
   for (;;) {
     await sleep(4000);
-    const r = await fetchRetry(atlasBase() + "/model/prediction/" + id, { headers: { Authorization: "Bearer " + getKey() } });
-    if (!r.ok) { if (r.status === 404) continue; throw new Error("Status failed (" + r.status + ")"); }
+    let r;
+    try { r = await fetch(atlasBase() + "/model/prediction/" + id, { headers: { Authorization: "Bearer " + getKey() } }); }
+    catch { onTick(last || "processing", Math.round((Date.now() - started) / 1000)); if (Date.now() - started > 10 * 60 * 1000) break; continue; }
+    if (r.status === 404) { // brand-new predictions can 404 briefly; a wrong id 404s forever
+      if (++notFound > 10) throw new Error("Atlas can’t find prediction “" + id + "” (404 for ~40s). The submit response likely didn’t return a usable prediction id.");
+      onTick(last || "processing", Math.round((Date.now() - started) / 1000)); continue;
+    }
+    if (!r.ok) throw new Error("Status check failed (" + r.status + ")");
+    notFound = 0;
     const j = await r.json(); const d = j.data || j;
-    const st = (d.status || "").toLowerCase();
-    onTick(st, Math.round((Date.now() - started) / 1000));
-    if (st === "completed" || st === "succeeded") { const out = (d.outputs && d.outputs[0]) || d.output || pickVideoUrl(d); if (!out) throw new Error("Completed but no output URL → " + JSON.stringify(d).slice(0, 200)); return out; }
-    if (st === "failed" || st === "error" || st === "canceled") throw new Error("Generation " + st + (d.error ? ": " + (typeof d.error === "string" ? d.error : JSON.stringify(d.error)) : ""));
-    if (Date.now() - started > 10 * 60 * 1000) throw new Error("Timed out after 10 min");
+    const st = (d.status || "").toLowerCase(); if (st) last = st;
+    console.log("[atlas] poll", id, "→", st || "(no status)", JSON.stringify(d).slice(0, 240));
+    onTick(st || "processing", Math.round((Date.now() - started) / 1000));
+    const out = (d.outputs && d.outputs[0]) || d.output || pickVideoUrl(d);
+    if (DONE.includes(st) || (out && /^https?:/i.test(out))) {
+      if (!out) throw new Error("Atlas says “" + st + "” but no output URL → " + JSON.stringify(d).slice(0, 200));
+      return out;
+    }
+    if (FAIL.includes(st)) throw new Error("Generation " + st + (d.error ? ": " + (typeof d.error === "string" ? d.error : JSON.stringify(d.error)) : ""));
+    if (Date.now() - started > 10 * 60 * 1000) break;
   }
+  throw new Error("Timed out after 10 min — last status from Atlas was “" + (last || "(none seen)") + "”. Send me that word. (prediction " + id + ")");
 }
 async function generateScene(scene, force) {
   if (!scene.image) { scene.error = "Add a first-frame photo first."; scene.genStatus = "error"; renderScene(scene); return; }
