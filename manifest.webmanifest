@@ -1,6 +1,6 @@
 {
-  "name": "AI Viral Video Creator",
-  "short_name": "Creator",
+  "name": "AI Avatar Content Factory",
+  "short_name": "Content Factory",
   "description": "Generate scenes with Seedance, then auto-assemble and upscale to 1080p.",
   "start_url": ".",
   "display": "standalone",
