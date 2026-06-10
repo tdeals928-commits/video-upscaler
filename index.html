@@ -330,7 +330,11 @@ $("keyTest").onclick = async () => {
 // search the whole response instead of assuming one field name.
 function collectUrls(o, acc) { acc = acc || []; if (o == null) return acc; if (typeof o === "string") { if (/^https?:\/\//i.test(o)) acc.push(o); return acc; } if (Array.isArray(o)) { o.forEach((v) => collectUrls(v, acc)); return acc; } if (typeof o === "object") { Object.values(o).forEach((v) => collectUrls(v, acc)); } return acc; }
 function deepFindUrl(o) { return collectUrls(o)[0] || null; }
-function pickVideoUrl(o) { const u = collectUrls(o); return u.find((x) => /\.(mp4|mov|webm|m4v)(\?|$)/i.test(x)) || u.find((x) => /output|result|video|generat/i.test(x)) || u[u.length - 1] || null; }
+function pickVideoUrl(o) {
+  // Exclude the API/polling/upload endpoints — the real output is on a CDN host.
+  const u = collectUrls(o).filter((x) => !/\/model\/(prediction|uploadmedia|generatevideo)/i.test(x));
+  return u.find((x) => /\.(mp4|mov|webm|m4v)(\?|$)/i.test(x)) || u.find((x) => /output|result|video|generat|storage|static|cdn/i.test(x)) || null;
+}
 function deepFindId(o) { if (!o || typeof o !== "object") return null; for (const k of ["id", "prediction_id", "predictionId", "task_id", "taskId", "request_id", "requestId", "uuid"]) if (o[k] != null && (typeof o[k] === "string" || typeof o[k] === "number")) return String(o[k]); if (o.data) return deepFindId(o.data); return null; }
 
 async function atlasUpload(file) {
@@ -419,9 +423,10 @@ async function atlasPoll(id, onTick) {
     const st = (d.status || "").toLowerCase(); if (st) last = st;
     console.log("[atlas] poll", id, "→", st || "(no status)", JSON.stringify(d).slice(0, 240));
     onTick(st || "processing", Math.round((Date.now() - started) / 1000));
-    const out = (d.outputs && d.outputs[0]) || d.output || pickVideoUrl(d);
-    if (DONE.includes(st) || (out && /^https?:/i.test(out))) {
-      if (!out) throw new Error("Atlas says “" + st + "” but no output URL → " + JSON.stringify(d).slice(0, 200));
+    const explicitOut = (d.outputs && d.outputs[0]) || d.output;
+    if (DONE.includes(st) || explicitOut) {
+      const out = explicitOut || pickVideoUrl(d);
+      if (!out) throw new Error("Atlas reported done but returned no output URL → " + JSON.stringify(d).slice(0, 200));
       return out;
     }
     if (FAIL.includes(st)) throw new Error("Generation " + st + (d.error ? ": " + (typeof d.error === "string" ? d.error : JSON.stringify(d.error)) : ""));
@@ -448,7 +453,9 @@ async function generateScene(scene, force) {
     const id = await atlasGenerate(scene);
     scene.predId = id; scene.genStatus = "queued"; renderScene(scene);
     const url = await atlasPoll(id, (st, secs) => { scene.genStatus = st || "processing"; scene.genSecs = secs; renderScene(scene); });
-    const vr = await fetchRetry(url, {}); if (!vr.ok) throw new Error("Couldn’t fetch result video (" + vr.status + ")");
+    let vr = await fetch(url); // output is usually a public CDN URL
+    if (vr.status === 401 || vr.status === 403) vr = await fetch(url, { headers: { Authorization: "Bearer " + getKey() } }); // …but auth it if needed
+    if (!vr.ok) throw new Error("Couldn’t fetch result video (" + vr.status + ")");
     const vb = await vr.blob();
     scene.video = new File([vb], "scene" + scene.id + ".mp4", { type: "video/mp4" });
     scene.fromCache = false;
