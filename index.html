@@ -97,7 +97,16 @@
       <button class="small" id="keySave" type="button">Save</button>
     </div>
     <div class="keystatus" id="keyStatus"></div>
+    <button class="small ghost" id="keyTest" type="button" style="margin-top:10px">Test Atlas connection</button>
     <div class="hint">Stored only in <b>this browser</b> (localStorage) and sent <b>directly to Atlas Cloud</b> when you generate — never to me or any other server. Get a key at <a href="https://www.atlascloud.ai" target="_blank" style="color:var(--accent)">atlascloud.ai</a>. Each 8s generation costs money on your Atlas account.</div>
+    <details style="margin-top:8px">
+      <summary style="font-size:12px;color:var(--muted);cursor:pointer">Advanced: custom API endpoint (use a proxy)</summary>
+      <div class="keyrow" style="margin-top:8px">
+        <input id="apiBase" type="text" placeholder="https://api.atlascloud.ai/api/v1" autocomplete="off" autocapitalize="off" spellcheck="false" />
+        <button class="small" id="baseSave" type="button">Save</button>
+      </div>
+      <div class="hint" style="margin-top:6px">Only if your browser/network blocks Atlas directly: point this at <b>your own</b> relay (e.g. a Cloudflare Worker that forwards to <code>api.atlascloud.ai</code> and adds permissive CORS). Leave blank to call Atlas directly.</div>
+    </details>
   </div>
 
   <!-- STEP 2: SCENES -->
@@ -158,7 +167,8 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const ATLAS = "https://api.atlascloud.ai/api/v1";
+const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
+function atlasBase() { return (localStorage.getItem("atlas_base") || ATLAS_DEFAULT).replace(/\/+$/, ""); }
 const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
 const CANVAS_W = 1080, CANVAS_H = 1920, CRF = 18;
 const VENDOR = new URL("vendor/", location.href).href;
@@ -286,6 +296,28 @@ $("keyShow").onclick = () => {
 };
 $("apiKey").onfocus = () => { if ($("apiKey").value.startsWith("•")) $("apiKey").value = ""; };
 
+// custom endpoint / proxy override
+$("apiBase") && ($("apiBase").value = localStorage.getItem("atlas_base") || "");
+$("baseSave") && ($("baseSave").onclick = () => {
+  const v = $("apiBase").value.trim().replace(/\/+$/, "");
+  if (v) localStorage.setItem("atlas_base", v); else localStorage.removeItem("atlas_base");
+  $("keyStatus").innerHTML = '<span class="ok">Endpoint set to ' + atlasBase() + '</span>';
+});
+
+// connection diagnostic — tells us exactly what (if anything) is blocked
+$("keyTest").onclick = async () => {
+  const out = $("keyStatus"); out.innerHTML = '<span class="warn">Testing ' + atlasBase() + ' …</span>';
+  const auth = { Authorization: "Bearer " + (getKey() || "none") };
+  const probe = async (opts) => { try { const r = await fetch(opts.url, opts.init); return { ok: true, status: r.status }; } catch (e) { return { ok: false, err: e.message || String(e) }; } };
+  const g = await probe({ url: atlasBase() + "/model/prediction/_diag_", init: { headers: auth } });
+  const p = await probe({ url: atlasBase() + "/model/generateVideo", init: { method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: "{}" } });
+  let v;
+  if (g.ok && p.ok) v = '<span class="ok">✓ Atlas is reachable (GET ' + g.status + ', POST ' + p.status + '). The network is fine — if generation still fails it’s an auth/parameter issue, not connectivity.</span>';
+  else if (g.ok && !p.ok) v = '<span class="bad">GET works but POST is blocked (“' + p.err + '”). Something (a content/ad blocker, firewall, or VPN) is blocking POST requests to atlascloud.ai. Turn it off for this site, switch networks, or set a proxy endpoint in Advanced.</span>';
+  else v = '<span class="bad">Can’t reach Atlas at all (“' + g.err + '”). A content blocker, VPN, DNS filter, or your network is blocking api.atlascloud.ai. Disable it, switch networks (e.g. cellular), or set a proxy endpoint in Advanced.</span>';
+  out.innerHTML = v;
+};
+
 // ---------- Atlas Cloud client ----------
 // Tolerant extractors — the API's exact field names vary across its docs, so we
 // search the whole response instead of assuming one field name.
@@ -300,7 +332,7 @@ async function atlasUpload(file) {
   for (let i = 0; i < 3; i++) {
     try {
       const fd = new FormData(); fd.append("file", f, f.name || "upload"); // rebuilt per attempt
-      const r = await fetch(ATLAS + "/model/uploadMedia", { method: "POST", headers: { Authorization: "Bearer " + getKey() }, body: fd });
+      const r = await fetch(atlasBase() + "/model/uploadMedia", { method: "POST", headers: { Authorization: "Bearer " + getKey() }, body: fd });
       const text = await r.text();
       if (!r.ok) throw new Error("Upload failed (" + r.status + "): " + text.slice(0, 200));
       let j; try { j = JSON.parse(text); } catch { if (/^https?:\/\//i.test(text.trim())) return text.trim(); throw new Error("Upload returned non-JSON: " + text.slice(0, 160)); }
@@ -316,7 +348,7 @@ async function atlasGenerate(scene) {
   const body = { model: MODEL, prompt: scene.prompt || "", image: imageUrl,
                  aspect_ratio: "9:16", duration: 8, resolution: "480p", generate_audio: true };
   if (scene.refImage) { try { body.last_image = await atlasUpload(scene.refImage); } catch {} }
-  const r = await fetchRetry(ATLAS + "/model/generateVideo", { method: "POST", headers: { Authorization: "Bearer " + getKey(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const r = await fetchRetry(atlasBase() + "/model/generateVideo", { method: "POST", headers: { Authorization: "Bearer " + getKey(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const text = await r.text();
   if (!r.ok) throw new Error("Generate failed (" + r.status + "): " + text.slice(0, 240));
   let j; try { j = JSON.parse(text); } catch { throw new Error("Generate returned non-JSON: " + text.slice(0, 160)); }
@@ -328,7 +360,7 @@ async function atlasPoll(id, onTick) {
   const started = Date.now();
   for (;;) {
     await sleep(4000);
-    const r = await fetchRetry(ATLAS + "/model/prediction/" + id, { headers: { Authorization: "Bearer " + getKey() } });
+    const r = await fetchRetry(atlasBase() + "/model/prediction/" + id, { headers: { Authorization: "Bearer " + getKey() } });
     if (!r.ok) { if (r.status === 404) continue; throw new Error("Status failed (" + r.status + ")"); }
     const j = await r.json(); const d = j.data || j;
     const st = (d.status || "").toLowerCase();
