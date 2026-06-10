@@ -415,7 +415,7 @@ async function generateScene(scene, force) {
     scene.genStatus = "done"; renderScene(scene); saveProject();
   } catch (e) {
     let m = (e && e.message) ? e.message : String(e);
-    if (/failed to fetch|networkerror|load failed/i.test(m)) m = "Network error reaching Atlas. Check your connection, and disable any content/ad blockers for atlascloud.ai, then retry.";
+    if (/failed to fetch|networkerror|load failed/i.test(m)) m = "Network blocked reaching " + atlasBase() + ". Run ‘Test Atlas connection’ above, try a different network (e.g. cellular/hotspot), or check the proxy endpoint.";
     scene.error = m; scene.genStatus = "error"; renderScene(scene);
   }
   refreshBuild();
