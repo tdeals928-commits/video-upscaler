@@ -346,7 +346,8 @@ async function atlasUpload(file) {
 async function atlasGenerate(scene) {
   const imageUrl = await atlasUpload(scene.image);
   const body = { model: MODEL, prompt: scene.prompt || "", image: imageUrl,
-                 aspect_ratio: "9:16", duration: 8, resolution: "480p", generate_audio: true };
+                 aspect_ratio: "9:16", duration: 8, resolution: "480p", generate_audio: true,
+                 camera_fixed: false, seed: -1 };
   if (scene.refImage) { try { body.last_image = await atlasUpload(scene.refImage); } catch {} }
   const r = await fetchRetry(atlasBase() + "/model/generateVideo", { method: "POST", headers: { Authorization: "Bearer " + getKey(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const text = await r.text();
