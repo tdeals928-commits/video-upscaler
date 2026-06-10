@@ -200,12 +200,21 @@ $("keyShow").onclick = () => {
 $("apiKey").onfocus = () => { if ($("apiKey").value.startsWith("•")) $("apiKey").value = ""; };
 
 // ---------- Atlas Cloud client ----------
+// Tolerant extractors — the API's exact field names vary across its docs, so we
+// search the whole response instead of assuming one field name.
+function collectUrls(o, acc) { acc = acc || []; if (o == null) return acc; if (typeof o === "string") { if (/^https?:\/\//i.test(o)) acc.push(o); return acc; } if (Array.isArray(o)) { o.forEach((v) => collectUrls(v, acc)); return acc; } if (typeof o === "object") { Object.values(o).forEach((v) => collectUrls(v, acc)); } return acc; }
+function deepFindUrl(o) { return collectUrls(o)[0] || null; }
+function pickVideoUrl(o) { const u = collectUrls(o); return u.find((x) => /\.(mp4|mov|webm|m4v)(\?|$)/i.test(x)) || u.find((x) => /output|result|video|generat/i.test(x)) || u[u.length - 1] || null; }
+function deepFindId(o) { if (!o || typeof o !== "object") return null; for (const k of ["id", "prediction_id", "predictionId", "task_id", "taskId", "request_id", "requestId", "uuid"]) if (o[k] != null && (typeof o[k] === "string" || typeof o[k] === "number")) return String(o[k]); if (o.data) return deepFindId(o.data); return null; }
+
 async function atlasUpload(file) {
   const fd = new FormData(); fd.append("file", file, file.name || "upload");
   const r = await fetch(ATLAS + "/model/uploadMedia", { method: "POST", headers: { Authorization: "Bearer " + getKey() }, body: fd });
-  if (!r.ok) throw new Error("Upload failed (" + r.status + "): " + (await r.text()).slice(0, 160));
-  const j = await r.json(); const url = j.url || (j.data && j.data.url);
-  if (!url) throw new Error("Upload: no url in response");
+  const text = await r.text();
+  if (!r.ok) throw new Error("Upload failed (" + r.status + "): " + text.slice(0, 200));
+  let j; try { j = JSON.parse(text); } catch { if (/^https?:\/\//i.test(text.trim())) return text.trim(); throw new Error("Upload returned non-JSON: " + text.slice(0, 160)); }
+  const url = deepFindUrl(j);
+  if (!url) throw new Error("Upload: no URL in response → " + JSON.stringify(j).slice(0, 220));
   return url;
 }
 async function atlasGenerate(scene) {
@@ -214,9 +223,11 @@ async function atlasGenerate(scene) {
                  aspect_ratio: "9:16", duration: 8, resolution: "480p", generate_audio: true };
   if (scene.refImage) { try { body.last_image = await atlasUpload(scene.refImage); } catch {} }
   const r = await fetch(ATLAS + "/model/generateVideo", { method: "POST", headers: { Authorization: "Bearer " + getKey(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error("Generate failed (" + r.status + "): " + (await r.text()).slice(0, 200));
-  const j = await r.json(); const id = j.id || (j.data && j.data.id) || j.prediction_id;
-  if (!id) throw new Error("No prediction id: " + JSON.stringify(j).slice(0, 160));
+  const text = await r.text();
+  if (!r.ok) throw new Error("Generate failed (" + r.status + "): " + text.slice(0, 240));
+  let j; try { j = JSON.parse(text); } catch { throw new Error("Generate returned non-JSON: " + text.slice(0, 160)); }
+  const id = deepFindId(j);
+  if (!id) throw new Error("No prediction id in response → " + JSON.stringify(j).slice(0, 220));
   return id;
 }
 async function atlasPoll(id, onTick) {
@@ -228,8 +239,8 @@ async function atlasPoll(id, onTick) {
     const j = await r.json(); const d = j.data || j;
     const st = (d.status || "").toLowerCase();
     onTick(st, Math.round((Date.now() - started) / 1000));
-    if (st === "completed" || st === "succeeded") { const out = (d.outputs && d.outputs[0]) || d.output; if (!out) throw new Error("No output url"); return out; }
-    if (st === "failed" || st === "error" || st === "canceled") throw new Error("Generation " + st + (d.error ? ": " + d.error : ""));
+    if (st === "completed" || st === "succeeded") { const out = (d.outputs && d.outputs[0]) || d.output || pickVideoUrl(d); if (!out) throw new Error("Completed but no output URL → " + JSON.stringify(d).slice(0, 200)); return out; }
+    if (st === "failed" || st === "error" || st === "canceled") throw new Error("Generation " + st + (d.error ? ": " + (typeof d.error === "string" ? d.error : JSON.stringify(d.error)) : ""));
     if (Date.now() - started > 10 * 60 * 1000) throw new Error("Timed out after 10 min");
   }
 }
@@ -272,8 +283,12 @@ function makeDrop(sc, field, thumbField, label, accept) {
       d.appendChild(cl); lbl.style.display = "none";
     } else lbl.style.display = "";
   };
+  const setFile = async (f) => { if (!f) return; sc[field] = f; sc[thumbField] = await thumbOf(f); paint(); refreshBuild(); };
   d.onclick = () => inp.click();
-  inp.onchange = async (e) => { const f = e.target.files[0]; e.target.value = ""; if (!f) return; sc[field] = f; sc[thumbField] = await thumbOf(f); paint(); refreshBuild(); };
+  inp.onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; setFile(f); };
+  ["dragover", "dragenter"].forEach((ev) => d.addEventListener(ev, (e) => { e.preventDefault(); d.style.borderColor = "var(--accent)"; }));
+  ["dragleave", "dragend"].forEach((ev) => d.addEventListener(ev, (e) => { e.preventDefault(); d.style.borderColor = ""; }));
+  d.addEventListener("drop", (e) => { e.preventDefault(); d.style.borderColor = ""; setFile(e.dataTransfer.files && e.dataTransfer.files[0]); });
   paint();
   return d;
 }
