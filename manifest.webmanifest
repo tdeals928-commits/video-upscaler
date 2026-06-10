@@ -1,7 +1,7 @@
 {
-  "name": "Video Upscaler 1080p",
-  "short_name": "Upscaler",
-  "description": "Re-encode clips to 1080p locally on your phone.",
+  "name": "AI Viral Video Creator",
+  "short_name": "Creator",
+  "description": "Generate scenes with Seedance, then auto-assemble and upscale to 1080p.",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#0d1117",

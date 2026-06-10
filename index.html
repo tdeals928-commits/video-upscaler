@@ -2,942 +2,493 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
-<title>Upscaler — 1080p on iPhone</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>AI Viral Video Creator</title>
 <link rel="manifest" href="manifest.webmanifest" />
 <meta name="theme-color" content="#0d1117" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Upscaler" />
+<meta name="apple-mobile-web-app-title" content="Creator" />
 <link rel="apple-touch-icon" href="icon.svg" />
 <style>
   :root {
     --bg: #0d1117; --panel: #161b22; --border: #2a313c; --text: #e6edf3;
-    --muted: #8b949e; --accent: #2f81f7; --accent-2: #1f6feb; --good: #3fb950; --bad: #f85149;
+    --muted: #8b949e; --accent: #2f81f7; --accent-2: #1f6feb; --good: #3fb950; --bad: #f85149; --warn: #d29922;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body {
     margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     background: radial-gradient(1000px 500px at 50% -10%, #1b2430, var(--bg)); color: var(--text);
-    padding: max(24px, env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+    padding: max(20px, env(safe-area-inset-top)) 14px calc(28px + env(safe-area-inset-bottom));
   }
-  .app { width: 100%; max-width: 560px; margin: 0 auto; }
-  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.02em; }
-  .sub { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 14px; }
-  #drop {
-    border: 2px dashed var(--border); border-radius: 12px; padding: 30px 16px; text-align: center;
-    background: #11161d; cursor: pointer;
-  }
-  #drop .big { font-size: 16px; font-weight: 600; }
-  #drop .small { color: var(--muted); font-size: 13px; margin-top: 6px; }
-  .file { display: flex; align-items: center; gap: 10px; font-size: 14px; margin-top: 12px; }
-  .file .name { font-weight: 600; word-break: break-all; }
-  .row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
-  .field { flex: 1; min-width: 150px; }
-  label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 6px; }
-  select {
+  .app { width: 100%; max-width: 600px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 2px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  .step { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--accent); font-weight: 700; margin-bottom: 10px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  input[type=text], input[type=password], textarea, select {
     width: 100%; padding: 11px 12px; background: #0d1117; color: var(--text);
-    border: 1px solid var(--border); border-radius: 8px; font-size: 15px; appearance: none;
+    border: 1px solid var(--border); border-radius: 8px; font-size: 15px; appearance: none; font-family: inherit;
   }
-  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; min-height: 30px; }
-  button {
-    width: 100%; margin-top: 18px; padding: 14px; font-size: 16px; font-weight: 600;
-    color: #fff; background: var(--accent-2); border: none; border-radius: 10px; cursor: pointer;
-  }
-  button:disabled { opacity: .5; }
-  button.save { background: var(--good); color: #06210f; }
-  .progress-wrap { display: none; margin-top: 18px; }
+  textarea { min-height: 64px; resize: vertical; line-height: 1.4; }
+  button { width: 100%; margin-top: 12px; padding: 13px; font-size: 15px; font-weight: 600; color: #fff; background: var(--accent-2); border: none; border-radius: 9px; cursor: pointer; }
+  button:disabled { opacity: .45; }
+  button.good { background: var(--good); color: #06210f; }
+  button.ghost { background: #1f2630; color: var(--text); border: 1px solid var(--border); }
+  button.small { width: auto; margin: 0; padding: 8px 12px; font-size: 13px; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .keyrow { display: flex; gap: 8px; }
+  .keyrow input { flex: 1; }
+  .keystatus { font-size: 12px; margin-top: 8px; }
+  .ok { color: var(--good); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  .scene { background: #11161d; border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .scenehead { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .scenetitle { font-weight: 700; font-size: 15px; flex: 1; }
+  .qord { display: flex; gap: 4px; }
+  .qord button, .iconbtn { width: 30px; margin: 0; padding: 4px 0; font-size: 13px; background: #1f2630; color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  .qord button:disabled { opacity: .35; }
+  .drops { display: flex; gap: 10px; margin-bottom: 10px; }
+  .drop { flex: 1; border: 2px dashed var(--border); border-radius: 10px; min-height: 92px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; cursor: pointer; background: #0d1117; padding: 8px; position: relative; overflow: hidden; }
+  .drop .dlabel { font-size: 11px; color: var(--muted); }
+  .drop img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .drop .clear { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; padding: 0; margin: 0; border-radius: 50%; background: rgba(0,0,0,.65); border: none; color: #fff; font-size: 12px; line-height: 22px; z-index: 2; }
+  .scnstatus { font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .scnbar { height: 6px; background: #0d1117; border: 1px solid var(--border); border-radius: 99px; overflow: hidden; margin-top: 8px; display: none; }
+  .scnbar > div { height: 100%; width: 30%; background: linear-gradient(90deg, var(--accent), var(--good)); }
+  .scnactions { display: flex; gap: 8px; margin-top: 10px; }
+  .scnactions button { margin: 0; }
+  .scnvid { width: 100%; border-radius: 8px; border: 1px solid var(--border); background: #000; margin-top: 10px; display: none; }
+  .progress-wrap { display: none; margin-top: 14px; }
   .bar { height: 10px; background: #0d1117; border: 1px solid var(--border); border-radius: 99px; overflow: hidden; }
   .bar > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--good)); transition: width .2s; }
   .status { font-size: 13px; color: var(--muted); margin-top: 8px; display: flex; justify-content: space-between; }
-  .result { display: none; margin-top: 18px; text-align: center; }
-  .result video { width: 100%; border-radius: 10px; border: 1px solid var(--border); background: #000; margin-bottom: 12px; }
-  .ok { color: var(--good); font-weight: 600; font-size: 14px; margin-bottom: 10px; }
-  .err { color: var(--bad); font-size: 13px; margin-top: 14px; display: none; white-space: pre-wrap; }
-  .note { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  #result video { width: 100%; border-radius: 10px; border: 1px solid var(--border); background: #000; margin-bottom: 10px; }
+  .err { color: var(--bad); font-size: 13px; margin-top: 10px; display: none; white-space: pre-wrap; }
   .foot { color: var(--muted); font-size: 12px; text-align: center; margin-top: 8px; }
-  code { background: #0d1117; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
   .engine { font-size: 12px; color: var(--muted); margin-top: 10px; text-align: center; }
-  .banner { background: #11161d; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; }
-  .banner .btitle { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 4px; }
-  .brow { display: flex; align-items: center; gap: 8px; padding: 7px 0; }
-  .brow + .brow { border-top: 1px solid var(--border); }
-  .btag { font-size: 12px; color: var(--text); white-space: nowrap; flex-shrink: 0; }
-  .burl { flex: 1; min-width: 0; font-size: 12px; color: var(--accent); font-family: ui-monospace, Menlo, monospace; word-break: break-all; text-decoration: none; }
-  .copy { flex-shrink: 0; width: auto; margin: 0; padding: 5px 11px; font-size: 11px; font-weight: 600; background: #1f2630; color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
-  #queue { margin-top: 14px; }
-  #queue:empty { display: none; }
-  .qitem { display: flex; align-items: center; gap: 10px; padding: 11px 0; border-top: 1px solid var(--border); }
-  .qitem:first-child { border-top: none; }
-  .qicon { flex-shrink: 0; font-size: 20px; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; position: relative; }
-  .qthumb { width: 48px; height: 48px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); background: #000; display: block; }
-  .qbadge { position: absolute; right: -4px; bottom: -4px; width: 18px; height: 18px; border-radius: 50%; background: var(--good); color: #06210f; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2px solid var(--panel); }
-  .qmain { flex: 1; min-width: 0; }
-  .qname { font-size: 13px; font-weight: 600; word-break: break-all; }
-  .qstat { font-size: 12px; color: var(--muted); margin-top: 3px; }
-  .qbar { height: 6px; background: #0d1117; border: 1px solid var(--border); border-radius: 99px; overflow: hidden; margin-top: 6px; display: none; }
-  .qbar > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--good)); transition: width .2s; }
-  .qactions { display: flex; gap: 6px; flex-shrink: 0; }
-  .qbtn { width: auto; margin: 0; padding: 7px 12px; font-size: 12px; font-weight: 600; border-radius: 7px; background: #1f2630; color: var(--text); border: 1px solid var(--border); }
-  .qbtn.save { background: var(--good); color: #06210f; border: none; }
-  .qsummary { font-size: 12px; color: var(--muted); margin-top: 12px; }
-  .qsummary:empty { display: none; }
-  .qtools { display: flex; gap: 16px; margin-top: 8px; }
-  .qtools button { width: auto; margin: 0; padding: 4px 0; background: none; border: none; color: var(--accent); font-size: 12px; font-weight: 600; }
-  .qtools button:disabled { color: var(--muted); opacity: .6; }
-  button.ghost { background: #1f2630; color: var(--text); border: 1px solid var(--border); }
-  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 50;
-           background: #1b2430; border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px 10px 16px;
-           display: flex; align-items: center; gap: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.5); max-width: 92vw; }
-  .toast span { font-size: 13px; color: var(--text); }
-  .toast button { width: auto; margin: 0; padding: 8px 14px; font-size: 13px; border-radius: 8px; }
-  .modebar { display: flex; gap: 6px; background: #0d1117; border: 1px solid var(--border); border-radius: 10px; padding: 4px; margin-top: 16px; }
-  .modebar button { flex: 1; width: auto; margin: 0; padding: 10px 8px; font-size: 13px; font-weight: 600; border-radius: 7px; background: none; color: var(--muted); border: none; }
-  .modebar button.active { background: var(--accent-2); color: #fff; }
-  .qtrim { display: none; margin-top: 8px; padding: 10px; background: #0d1117; border: 1px solid var(--border); border-radius: 8px; }
-  .qtrimrow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-  .qtrimrow input[type=range] { flex: 1; accent-color: var(--accent); }
-  .qtrimrow span { width: 34px; flex-shrink: 0; }
-  .qtrimlbl { font-size: 12px; color: var(--text); margin-top: 2px; }
-  .qord { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
-  .qord button { width: 26px; margin: 0; padding: 2px 0; font-size: 12px; line-height: 1.2; background: #1f2630; color: var(--text); border: 1px solid var(--border); border-radius: 5px; }
-  .qord button:disabled { opacity: .35; }
+  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 50; background: #1b2430; border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px 10px 16px; display: flex; align-items: center; gap: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+  .toast span { font-size: 13px; } .toast button { width: auto; margin: 0; padding: 8px 14px; font-size: 13px; border-radius: 8px; }
+  .pill { font-size: 11px; color: var(--muted); background: #0d1117; border: 1px solid var(--border); border-radius: 99px; padding: 3px 9px; }
 </style>
 </head>
 <body>
 <div class="app">
-  <div class="banner">
-    <div class="btitle">Open this app</div>
-    <div class="brow">
-      <span class="btag">📱 Phone / anywhere</span>
-      <a class="burl" href="https://tdeals928-commits.github.io/video-upscaler/">tdeals928-commits.github.io/video-upscaler</a>
-      <button class="copy" onclick="copyURL('https://tdeals928-commits.github.io/video-upscaler/', this)">Copy</button>
+  <h1>AI Viral Video Creator</h1>
+  <p class="sub">Generate each scene with Seedance, then auto-assemble &amp; upscale to 1080p — on your device.</p>
+
+  <!-- STEP 1: API KEY -->
+  <div class="card">
+    <div class="step">1 · Atlas Cloud API key</div>
+    <div class="keyrow">
+      <input id="apiKey" type="password" placeholder="atlas_... (paste your key)" autocomplete="off" autocapitalize="off" spellcheck="false" />
+      <button class="small ghost" id="keyShow" type="button">Show</button>
+      <button class="small" id="keySave" type="button">Save</button>
     </div>
-    <div class="brow">
-      <span class="btag">💻 This Mac · fastest</span>
-      <span class="burl">localhost:4000 <span style="color:var(--muted)">(Mac app)</span></span>
-      <button class="copy" onclick="copyURL('http://localhost:4000', this)">Copy</button>
-    </div>
+    <div class="keystatus" id="keyStatus"></div>
+    <div class="hint">Stored only in <b>this browser</b> (localStorage) and sent <b>directly to Atlas Cloud</b> when you generate — never to me or any other server. Get a key at <a href="https://www.atlascloud.ai" target="_blank" style="color:var(--accent)">atlascloud.ai</a>. Each 8s generation costs money on your Atlas account.</div>
   </div>
-  <h1>Upscaler</h1>
-  <p class="sub">Re-encode a clip to 1080p — entirely on your phone, nothing uploaded.</p>
 
-  <div class="panel">
-    <div id="drop">
-      <div class="big">Tap to choose videos</div>
-      <div class="small">one or many — from Photos or Files (MP4, MOV, …)</div>
-      <input id="fileInput" type="file" accept="video/*" multiple hidden />
-    </div>
+  <!-- STEP 2: SCENES -->
+  <div class="card">
+    <div class="step">2 · Scenes <span class="pill">9:16 · 8s · 480p · audio on</span></div>
+    <div id="scenes"></div>
+    <button class="ghost" id="addScene" type="button">＋ Add scene</button>
+  </div>
 
-    <div class="modebar" id="modebar">
-      <button id="modeEach" class="active">Upscale each</button>
-      <button id="modeAssemble">Stitch into one</button>
-    </div>
-
-    <div id="queue"></div>
-    <div class="qsummary" id="queueSummary"></div>
-    <div class="qtools" id="queueTools" style="display:none">
-      <button id="clearDone">Clear finished</button>
-      <button id="clearAll">Clear all</button>
-    </div>
-
-    <div class="row">
-      <div class="field">
-        <label for="preset">Target size</label>
-        <select id="preset">
-          <option value="auto" selected>Auto — match my video (recommended)</option>
-          <option value="landscape">Force Landscape (1920×1080)</option>
-          <option value="portrait">Force Portrait (1080×1920)</option>
-          <option value="square">Force Square (1080×1080)</option>
-          <option value="fit">Keep aspect ratio (1080 tall)</option>
-        </select>
-        <div class="hint" id="presetHint">Matches your video’s shape — no black bars added.</div>
-      </div>
-      <div class="field">
-        <label for="crf">Quality</label>
-        <select id="crf">
-          <option value="18" selected>High — visually lossless (CRF 18)</option>
-          <option value="20">Balanced — smaller file (CRF 20)</option>
-          <option value="16">Very high (CRF 16)</option>
-        </select>
-        <div class="hint" id="crfHint">Recommended. Looks like the source, reasonable size.</div>
+  <!-- STEP 3: BUILD -->
+  <div class="card">
+    <div class="step">3 · Assemble &amp; upscale</div>
+    <label>Background music (optional)</label>
+    <div class="drops">
+      <div class="drop" id="musicDrop" style="min-height:60px">
+        <span class="dlabel" id="musicLabel">＋ Drop an audio file</span>
+        <input id="musicInput" type="file" accept="audio/*" hidden />
       </div>
     </div>
-
-    <button id="go" disabled>Upscale to 1080p</button>
-
+    <div class="hint">Final output: <b>1080×1920 (9:16) · CRF 18 (visually lossless) · faststart MP4</b>. Scenes are processed one at a time on your device.</div>
+    <button class="good" id="build" type="button" disabled>Assemble &amp; upscale to 1080p</button>
     <div class="progress-wrap" id="progWrap">
       <div class="bar"><div id="barFill"></div></div>
       <div class="status"><span id="statusText">Starting…</span><span id="pct">0%</span></div>
     </div>
-
-    <button class="save" id="saveAll" style="display:none">⬇ Save all to Photos / apps</button>
-    <button class="ghost" id="downloadAll" style="display:none">⬇ Download all as .zip</button>
-    <div class="note" id="saveNote" style="display:none"><b>Save</b> opens the Share sheet (choose <b>Save Video</b> → Photos, or send to an app). <b>Download .zip</b> saves one file with every clip (goes to Files / Downloads). On big batches, saving one at a time is most reliable.</div>
-
-    <div id="asmResult" style="display:none">
-      <div class="ok" id="asmOk" style="margin-top:18px"></div>
-      <button class="save" id="asmSave">⬇ Save to Photos / apps</button>
-      <button class="ghost" id="asmDownload">⬇ Download .mp4</button>
-    </div>
-
-    <div class="result" id="previewWrap" style="display:none">
-      <video id="outVideo" controls playsinline></video>
-    </div>
-
     <div class="err" id="errBox"></div>
-    <div class="engine" id="engineState">Engine loads on first run (~30&nbsp;MB, cached after).</div>
+    <div class="engine" id="engineState"></div>
   </div>
 
-  <p class="note">⚡ Runs <b>100% on your phone</b> with ffmpeg (WebAssembly). Videos are processed one at a time. Best for clips under ~1 minute — long clips or very large batches may run out of memory (save finished ones, then reload).</p>
-  <p class="foot">Tip: in Safari, <b>Share → Add to Home Screen</b> to use it like an app, even offline.</p>
+  <!-- STEP 4: RESULT -->
+  <div class="card" id="result" style="display:none">
+    <div class="step">4 · Your video</div>
+    <div class="ok" id="resultInfo" style="font-weight:600;margin-bottom:10px"></div>
+    <video id="finalVideo" controls playsinline></video>
+    <button class="good" id="saveFinal" type="button">⬇ Save / Share final video</button>
+    <button class="ghost" id="downloadFinal" type="button">⬇ Download final .mp4</button>
+    <button class="ghost" id="downloadAll" type="button">⬇ Download everything (.zip)</button>
+    <div class="hint">Zip includes the final video, every scene clip, and your source images.</div>
+  </div>
+
+  <p class="foot">Runs in your browser with ffmpeg (WebAssembly). Add to Home Screen for an app-like experience.</p>
 </div>
 
 <div class="toast" id="updateToast" style="display:none">
-  <span>🎉 New version available</span>
-  <button id="updateBtn">Refresh</button>
+  <span>🎉 New version available</span><button id="updateBtn" type="button">Refresh</button>
 </div>
 
 <script src="vendor/ffmpeg.js"></script>
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-let ffmpeg = null, engineReady = false;
-let jobs = [], idSeq = 1, running = false;
-let currentJob = null, batchDone = 0, batchTotal = 0;
-let encMs = 0, encSec = 0; // for ETA: accumulated encode time vs source seconds
-let mode = "each", assembledBlob = null; // "each" = upscale separately, "assemble" = stitch into one
-
-function copyURL(text, btn) {
-  const flash = (msg) => {
-    if (!btn.dataset.label) btn.dataset.label = btn.textContent;
-    btn.textContent = msg;
-    setTimeout(() => { btn.textContent = btn.dataset.label; delete btn.dataset.label; }, 1200);
-  };
-  const fallback = () => {
-    try {
-      const ta = document.createElement("textarea");
-      ta.value = text; ta.readOnly = true;
-      ta.style.position = "fixed"; ta.style.top = "0"; ta.style.opacity = "0";
-      document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
-      const ok = document.execCommand("copy"); ta.remove();
-      flash(ok ? "Copied!" : "Copy failed");
-    } catch { flash("Copy failed"); }
-  };
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(() => flash("Copied!")).catch(fallback);
-  } else fallback();
-}
-
-// Engine files are bundled locally (vendor/) so the app is self-contained and
-// works offline. Absolute URLs so the worker resolves them correctly.
+const ATLAS = "https://api.atlascloud.ai/api/v1";
+const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
+const CANVAS_W = 1080, CANVAS_H = 1920, CRF = 18;
 const VENDOR = new URL("vendor/", location.href).href;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const presetHints = {
-  landscape: "Forces 1920×1080. Adds black bars to vertical clips.",
-  portrait: "Forces 1080×1920. Adds black bars to landscape clips.",
-  square: "Forces 1080×1080. Adds black bars to non-square clips.",
-  fit: "Scales to 1080 tall, keeps shape. No black bars.",
-};
-const crfHints = {
-  "18": "Recommended. Looks like the source, reasonable size.",
-  "20": "Smaller file, still high quality.",
-  "16": "Larger file, extra quality headroom.",
-};
+let ffmpeg = null, engineReady = false, building = false;
+let scenes = [], idSeq = 1, musicFile = null, finalBlob = null;
 
-function fmtSize(b) {
-  if (b == null) return "";
-  const u = ["B", "KB", "MB", "GB"]; let i = 0;
-  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
-  return b.toFixed(b < 10 && i > 0 ? 1 : 0) + " " + u[i];
-}
-function fmtDur(s) {
-  if (!s || !isFinite(s)) return "";
-  s = Math.round(s);
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
-  const mm = h ? String(m).padStart(2, "0") : String(m);
-  return (h ? h + ":" : "") + mm + ":" + String(ss).padStart(2, "0");
-}
-
-// What a given preset will produce for a source of w×h.
-function autoTarget(w, h) {
-  if (!w || !h) return null;
-  const even = (n) => Math.max(2, Math.round(n / 2) * 2);
-  if (h > w) return "1080×" + even((1080 * h) / w) + " (vertical)";
-  if (w > h) return even((1080 * w) / h) + "×1080 (landscape)";
-  return "1080×1080 (square)";
-}
-function targetDims(preset, w, h) {
-  if (preset === "landscape") return "1920×1080";
-  if (preset === "portrait") return "1080×1920";
-  if (preset === "square") return "1080×1080";
-  if (preset === "fit") return "1080 tall";
-  const t = autoTarget(w, h);
-  return t ? t.replace(/ \(.*\)/, "") : "1080p";
-}
-function curPreset() { return $("preset").value; }
-
-function updatePresetHint() {
-  const p = curPreset();
-  if (mode === "assemble") {
-    const cp = (p === "auto" || p === "fit") ? "landscape" : p;
-    const dimsMap = { landscape: "1920×1080", portrait: "1080×1920", square: "1080×1080" };
-    $("presetHint").textContent = "All clips placed on one " + dimsMap[cp] + " canvas (different-shaped clips get black bars).";
-    return;
-  }
-  if (p === "auto") {
-    const ready = jobs.filter((j) => j.w && j.h);
-    if (jobs.length === 1 && ready.length === 1) {
-      const t = autoTarget(jobs[0].w, jobs[0].h);
-      $("presetHint").textContent = t ? "Will export " + t + " — no black bars." : "Matches your video’s shape — no black bars.";
-    } else if (jobs.length > 1) {
-      $("presetHint").textContent = "Each video keeps its own shape — no black bars.";
-    } else {
-      $("presetHint").textContent = "Matches your video’s shape — no black bars added.";
-    }
-  } else {
-    $("presetHint").textContent = presetHints[p];
-  }
-}
-$("preset").onchange = () => { updatePresetHint(); jobs.forEach(renderJob); saveSettings(); };
-$("crf").onchange = (e) => { $("crfHint").textContent = crfHints[e.target.value]; saveSettings(); };
-
-function saveSettings() {
-  try { localStorage.setItem("up_preset", $("preset").value); localStorage.setItem("up_crf", $("crf").value); } catch {}
-}
-function loadSettings() {
-  try {
-    const p = localStorage.getItem("up_preset"), c = localStorage.getItem("up_crf");
-    if (p && [...$("preset").options].some((o) => o.value === p)) $("preset").value = p;
-    if (c && [...$("crf").options].some((o) => o.value === c)) $("crf").value = c;
-  } catch {}
-  updatePresetHint();
-  $("crfHint").textContent = crfHints[$("crf").value];
-}
-loadSettings();
-
-// ---- Mode: "Upscale each" vs "Stitch into one" ----
-function setMode(m) {
-  mode = m;
-  $("modeEach").classList.toggle("active", m === "each");
-  $("modeAssemble").classList.toggle("active", m === "assemble");
-  $("asmResult").style.display = "none";
-  $("saveAll").style.display = $("downloadAll").style.display = $("saveNote").style.display = "none";
-  $("previewWrap").style.display = "none";
-  renderQueue(); updatePresetHint(); refreshControls();
-}
-$("modeEach").onclick = () => setMode("each");
-$("modeAssemble").onclick = () => setMode("assemble");
-
-function trimmedLen(job) {
-  if (!job.dur) return 0;
-  const s = job.trimStart || 0, e = (job.trimEnd != null ? job.trimEnd : job.dur);
-  return Math.max(0, e - s);
-}
-function moveJob(job, dir) {
-  const i = jobs.indexOf(job), j = i + dir;
-  if (j < 0 || j >= jobs.length) return;
-  jobs[i] = jobs[j]; jobs[j] = job;
-  renderQueue(); refreshControls();
-}
-function toggleTrim(job) { job.trimOpen = !job.trimOpen; if (job.trimOpen) buildTrim(job); renderJob(job); }
-function buildTrim(job) {
-  const t = job.el.trim; t.innerHTML = "";
-  const dur = job.dur || 0;
-  if (!dur) { t.textContent = "Length unknown — can’t trim this clip."; return; }
-  if (job.trimEnd == null) job.trimEnd = dur;
-  const mk = (val) => { const r = document.createElement("input"); r.type = "range"; r.min = 0; r.max = dur; r.step = 0.1; r.value = val; return r; };
-  const s = mk(job.trimStart || 0), e = mk(job.trimEnd);
-  const lbl = document.createElement("div"); lbl.className = "qtrimlbl";
-  const upd = (which) => {
-    let a = parseFloat(s.value), b = parseFloat(e.value);
-    if (b - a < 0.1) { if (which === "s") { a = Math.min(a, dur - 0.1); b = a + 0.1; } else { b = Math.max(b, 0.1); a = b - 0.1; } s.value = a; e.value = b; }
-    job.trimStart = a; job.trimEnd = b;
-    lbl.textContent = "Start " + fmtDur(a) + "  ·  End " + fmtDur(b) + "  ·  Keeps " + fmtDur(b - a);
-    const trimmed = Math.abs((b - a) - dur) > 0.05;
-    job.el.stat.style.color = "var(--muted)";
-    job.el.stat.textContent = trimmed ? "Length " + fmtDur(b - a) + " (trimmed from " + fmtDur(dur) + ")" : fmtDur(dur) + " · full";
-    updateSummary();
-  };
-  s.oninput = () => upd("s"); e.oninput = () => upd("e");
-  const row = (label, input) => { const l = document.createElement("label"); l.className = "qtrimrow"; const sp = document.createElement("span"); sp.textContent = label; l.append(sp, input); return l; };
-  t.append(row("Start", s), row("End", e), lbl); upd("init");
-}
-
-// Probe whether a clip in the FS has an audio stream (so stitching can add silence if not).
-async function probeHasAudio(name) {
-  const buf = []; const handler = ({ message }) => buf.push(message);
-  ffmpeg.on("log", handler);
-  try { await ffmpeg.exec(["-i", name]); } catch {}
-  ffmpeg.off("log", handler);
-  return buf.some((m) => /Stream #\d+:\d+.*Audio:/i.test(m));
-}
-
-function reenable() { $("preset").disabled = $("crf").disabled = false; $("modeEach").disabled = $("modeAssemble").disabled = false; }
-async function cleanupSegs(segs) { for (const s of segs) { try { await ffmpeg.deleteFile(s); } catch {} } }
-
-async function assembleAll() {
-  if (running) return;
-  if (jobs.length < 2) { fail("Add at least 2 clips to stitch (use ‘Upscale each’ for a single clip)."); return; }
-  running = true;
-  $("preset").disabled = $("crf").disabled = true; $("modeEach").disabled = $("modeAssemble").disabled = true;
-  $("errBox").style.display = $("asmResult").style.display = $("previewWrap").style.display = "none";
-  $("progWrap").style.display = "block";
-  assembledBlob = null;
-  renderQueue(); refreshControls();
-  setProgress(0, "Loading engine…");
-  try { await loadEngine(); } catch (e) { fail("Couldn’t load the video engine: " + (e.message || e)); running = false; reenable(); refreshControls(); return; }
-
-  const { fetchFile } = window.FFmpegUtil;
-  let preset = curPreset(); if (preset === "auto" || preset === "fit") preset = "landscape";
-  const [W, H] = { landscape: [1920, 1080], portrait: [1080, 1920], square: [1080, 1080] }[preset];
-  const crf = $("crf").value;
-  const N = jobs.length;
-  const segs = []; let totalLen = 0;
-  batchTotal = N; encMs = 0; encSec = 0;
-
-  for (let i = 0; i < N; i++) {
-    const job = jobs[i];
-    batchDone = i;
-    setProgress(Math.round((i / N) * 100), "Preparing clip " + (i + 1) + " of " + N + "…");
-    job.status = "encoding"; job.progress = 0; renderJob(job); currentJob = job;
-    const inName = "asm_in_" + job.id + ".mp4", seg = "asm_" + i + ".ts";
-    const start = job.trimStart || 0, len = trimmedLen(job) || job.dur || 0;
-    try {
-      await ffmpeg.writeFile(inName, await fetchFile(job.file));
-      const hasAudio = await probeHasAudio(inName);
-      const vf = `[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v]`;
-      const ss = start > 0 ? ["-ss", String(start)] : [];
-      const t = len > 0 ? ["-t", String(len)] : [];
-      const tail = ["-c:v", "libx264", "-crf", String(crf), "-preset", "medium", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-f", "mpegts", seg];
-      const args = hasAudio
-        ? [...ss, ...t, "-i", inName, "-filter_complex", vf + ";[0:a]aresample=48000,aformat=channel_layouts=stereo[a]", "-map", "[v]", "-map", "[a]", ...tail]
-        : [...ss, ...t, "-i", inName, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", vf, "-map", "[v]", "-map", "1:a", "-shortest", ...tail];
-      await ffmpeg.exec(args);
-      segs.push(seg); totalLen += len;
-      job.status = "queued";
-    } catch (e) {
-      job.status = "error"; job.error = friendlyErr(e);
-    } finally {
-      currentJob = null; renderJob(job);
-      try { await ffmpeg.deleteFile(inName); } catch {}
-    }
-  }
-
-  if (segs.length < 2) {
-    await cleanupSegs(segs);
-    fail("Couldn’t prepare enough clips to stitch (need at least 2 that work).");
-    running = false; reenable(); jobs.forEach((j) => { if (j.status !== "error") j.status = "queued"; }); renderQueue(); refreshControls(); return;
-  }
-
-  setProgress(98, "Stitching " + segs.length + " clips together…");
-  try {
-    await ffmpeg.writeFile("asm_list.txt", segs.map((s) => "file '" + s + "'").join("\n") + "\n");
-    await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "asm_list.txt", "-c", "copy", "-movflags", "+faststart", "assembled.mp4"]);
-    const data = await ffmpeg.readFile("assembled.mp4");
-    assembledBlob = new Blob([data.buffer], { type: "video/mp4" });
-  } catch (e) {
-    await cleanupSegs(segs); fail("Couldn’t stitch the clips: " + (e.message || e));
-    running = false; reenable(); renderQueue(); refreshControls(); return;
-  }
-  await cleanupSegs(segs);
-  try { await ffmpeg.deleteFile("asm_list.txt"); await ffmpeg.deleteFile("assembled.mp4"); } catch {}
-
-  setProgress(100, "Done");
-  $("asmOk").textContent = "✓ Stitched " + segs.length + " clips — " + fmtDur(totalLen) + " · " + W + "×" + H + " · " + fmtSize(assembledBlob.size);
-  $("asmResult").style.display = "block";
-  $("outVideo").src = URL.createObjectURL(assembledBlob);
-  $("previewWrap").style.display = "block";
-  running = false; reenable();
-  jobs.forEach((j) => { if (j.status !== "error") j.status = "queued"; });
-  renderQueue(); refreshControls();
-}
-
-$("asmSave").onclick = () => { if (assembledBlob) saveBlob(assembledBlob, "stitched_1080p.mp4"); };
-$("asmDownload").onclick = () => {
-  if (!assembledBlob) return;
-  const url = URL.createObjectURL(assembledBlob);
-  const a = document.createElement("a"); a.href = url; a.download = "stitched_1080p.mp4";
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 20000);
-};
-
-// Read a video's dimensions/duration AND grab a thumbnail frame, in one decode.
-// onMeta fires early (as soon as w/h/duration are known) so the row updates
-// before the thumbnail (which needs a seek) is ready.
-function probe(f, onMeta) {
-  return new Promise((resolve) => {
-    const v = document.createElement("video");
-    v.preload = "auto"; v.muted = true; v.playsInline = true;
-    let w = 0, h = 0, d = 0, done = false;
-    const finish = (thumb) => { if (done) return; done = true; try { URL.revokeObjectURL(v.src); } catch {} resolve({ thumb }); };
-    const grab = () => {
-      if (done) return;
-      try {
-        if (!w || !h) return finish(null);
-        const S = 96; // thumbnail is a 96×96 cover crop
-        const c = document.createElement("canvas"); c.width = S; c.height = S;
-        const ctx = c.getContext("2d");
-        const r = Math.max(S / w, S / h), dw = w * r, dh = h * r;
-        ctx.drawImage(v, (S - dw) / 2, (S - dh) / 2, dw, dh);
-        finish(c.toDataURL("image/jpeg", 0.6));
-      } catch { finish(null); }
-    };
-    v.onloadedmetadata = () => { w = v.videoWidth; h = v.videoHeight; d = v.duration; if (onMeta) onMeta(w, h, d); };
-    v.onloadeddata = () => {
-      v.onseeked = grab;
-      try { v.currentTime = Math.min(0.1, (v.duration || 1) * 0.1); } catch { grab(); }
-      setTimeout(grab, 1500); // fallback if the seek never settles
-    };
-    v.onerror = () => finish(null);
-    setTimeout(grab, 6000); // overall safety net
-    v.src = URL.createObjectURL(f);
+// ---------- helpers ----------
+function fmtSize(b) { if (b == null) return ""; const u = ["B","KB","MB","GB"]; let i = 0; while (b >= 1024 && i < u.length-1) { b /= 1024; i++; } return b.toFixed(b < 10 && i > 0 ? 1 : 0) + " " + u[i]; }
+function fmtDur(s) { if (!s || !isFinite(s)) return ""; s = Math.round(s); const m = Math.floor(s/60), ss = s%60; return m + ":" + String(ss).padStart(2,"0"); }
+function safeName(n) { return (n || "x").replace(/[^a-z0-9_\-]+/gi, "_"); }
+async function thumbOf(file) {
+  return new Promise((res) => {
+    const url = URL.createObjectURL(file); const isVid = (file.type || "").startsWith("video");
+    if (isVid) {
+      const v = document.createElement("video"); v.preload = "auto"; v.muted = true; v.playsInline = true;
+      const grab = () => { try { const c = document.createElement("canvas"); c.width = 96; c.height = 96; const x = c.getContext("2d"); const w = v.videoWidth||1, h = v.videoHeight||1, r = Math.max(96/w,96/h); x.drawImage(v,(96-w*r)/2,(96-h*r)/2,w*r,h*r); URL.revokeObjectURL(url); res(c.toDataURL("image/jpeg",0.6)); } catch { URL.revokeObjectURL(url); res(null); } };
+      v.onloadeddata = () => { v.onseeked = grab; try { v.currentTime = 0.1; } catch { grab(); } setTimeout(grab, 1200); };
+      v.onerror = () => { URL.revokeObjectURL(url); res(null); }; setTimeout(() => res(null), 5000); v.src = url;
+    } else { res(url); } // image: object URL used directly as <img src>
   });
 }
 
-function safeBase(name) {
-  return (name.replace(/\.[^.]+$/, "") || "video").replace(/[^a-z0-9_\-]+/gi, "_");
+// ---------- API key ----------
+function getKey() { return (localStorage.getItem("atlas_key") || "").trim(); }
+function refreshKeyStatus() {
+  const k = getKey();
+  $("keyStatus").innerHTML = k ? '<span class="ok">✓ Key saved — generation enabled</span>' : '<span class="warn">No key yet — you can still drop in ready-made videos, but generation is off.</span>';
+  $("apiKey").value = k ? "••••••••••••" + k.slice(-4) : "";
+  scenes.forEach(renderScene);
 }
+$("keySave").onclick = () => {
+  let v = $("apiKey").value.trim();
+  if (v && !v.startsWith("•")) { localStorage.setItem("atlas_key", v); }
+  refreshKeyStatus();
+};
+$("keyShow").onclick = () => {
+  const inp = $("apiKey");
+  if (inp.type === "password") { inp.type = "text"; if (getKey() && inp.value.startsWith("•")) inp.value = getKey(); $("keyShow").textContent = "Hide"; }
+  else { inp.type = "password"; refreshKeyStatus(); $("keyShow").textContent = "Show"; }
+};
+$("apiKey").onfocus = () => { if ($("apiKey").value.startsWith("•")) $("apiKey").value = ""; };
 
-function addFiles(list) {
-  const arr = Array.from(list || []).filter(
-    (f) => f && (f.type.startsWith("video") || /\.(mp4|mov|m4v|webm|mkv|avi|3gp)$/i.test(f.name))
-  );
-  for (const f of arr) {
-    const job = { id: idSeq++, file: f, name: f.name, w: 0, h: 0, dur: 0, thumb: null, status: "queued",
-                  blob: null, size: 0, dims: "", error: "", outName: safeBase(f.name) + "_1080p.mp4", el: null,
-                  trimStart: 0, trimEnd: null, trimOpen: false };
-    jobs.push(job);
-    probe(f, (w, h, d) => { job.w = w; job.h = h; job.dur = d; renderJob(job); updatePresetHint(); updateSummary(); })
-      .then(({ thumb }) => { job.thumb = thumb; renderJob(job); });
-  }
-  if (mode === "assemble") { $("asmResult").style.display = "none"; assembledBlob = null; }
-  renderQueue();
-  updatePresetHint();
-  refreshControls();
+// ---------- Atlas Cloud client ----------
+async function atlasUpload(file) {
+  const fd = new FormData(); fd.append("file", file, file.name || "upload");
+  const r = await fetch(ATLAS + "/model/uploadMedia", { method: "POST", headers: { Authorization: "Bearer " + getKey() }, body: fd });
+  if (!r.ok) throw new Error("Upload failed (" + r.status + "): " + (await r.text()).slice(0, 160));
+  const j = await r.json(); const url = j.url || (j.data && j.data.url);
+  if (!url) throw new Error("Upload: no url in response");
+  return url;
 }
-
-function removeJob(job) {
-  if (running) return;
-  jobs = jobs.filter((j) => j !== job);
-  renderQueue();
-  updatePresetHint();
-  refreshControls();
+async function atlasGenerate(scene) {
+  const imageUrl = await atlasUpload(scene.image);
+  const body = { model: MODEL, prompt: scene.prompt || "", image: imageUrl,
+                 aspect_ratio: "9:16", duration: 8, resolution: "480p", generate_audio: true };
+  if (scene.refImage) { try { body.last_image = await atlasUpload(scene.refImage); } catch {} }
+  const r = await fetch(ATLAS + "/model/generateVideo", { method: "POST", headers: { Authorization: "Bearer " + getKey(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error("Generate failed (" + r.status + "): " + (await r.text()).slice(0, 200));
+  const j = await r.json(); const id = j.id || (j.data && j.data.id) || j.prediction_id;
+  if (!id) throw new Error("No prediction id: " + JSON.stringify(j).slice(0, 160));
+  return id;
 }
-
-function renderQueue() {
-  const q = $("queue");
-  q.innerHTML = "";
-  for (const job of jobs) {
-    const row = document.createElement("div"); row.className = "qitem";
-    const icon = document.createElement("div"); icon.className = "qicon"; icon.textContent = "🎬";
-    const main = document.createElement("div"); main.className = "qmain";
-    const name = document.createElement("div"); name.className = "qname"; name.textContent = job.name;
-    const stat = document.createElement("div"); stat.className = "qstat";
-    const barWrap = document.createElement("div"); barWrap.className = "qbar";
-    const bar = document.createElement("div"); barWrap.appendChild(bar);
-    const trim = document.createElement("div"); trim.className = "qtrim";
-    main.append(name, stat, barWrap, trim);
-    const actions = document.createElement("div"); actions.className = "qactions";
-    row.append(icon, main, actions);
-    q.appendChild(row);
-    job.el = { icon, stat, barWrap, bar, actions, trim };
-    renderJob(job);
-    if (mode === "assemble" && job.trimOpen && job.dur) buildTrim(job);
-  }
-}
-
-function setIcon(e, job) {
-  e.icon.innerHTML = "";
-  if (job.thumb) {
-    const img = document.createElement("img"); img.className = "qthumb"; img.src = job.thumb; img.alt = "";
-    if (job.status === "done") { const b = document.createElement("span"); b.className = "qbadge"; b.textContent = "✓"; e.icon.append(img, b); }
-    else e.icon.appendChild(img);
-  } else {
-    e.icon.textContent = job.status === "error" ? "⚠️" : job.status === "done" ? "✅" : "🎬";
+async function atlasPoll(id, onTick) {
+  const started = Date.now();
+  for (;;) {
+    await sleep(4000);
+    const r = await fetch(ATLAS + "/model/prediction/" + id, { headers: { Authorization: "Bearer " + getKey() } });
+    if (!r.ok) { if (r.status === 404) continue; throw new Error("Status failed (" + r.status + ")"); }
+    const j = await r.json(); const d = j.data || j;
+    const st = (d.status || "").toLowerCase();
+    onTick(st, Math.round((Date.now() - started) / 1000));
+    if (st === "completed" || st === "succeeded") { const out = (d.outputs && d.outputs[0]) || d.output; if (!out) throw new Error("No output url"); return out; }
+    if (st === "failed" || st === "error" || st === "canceled") throw new Error("Generation " + st + (d.error ? ": " + d.error : ""));
+    if (Date.now() - started > 10 * 60 * 1000) throw new Error("Timed out after 10 min");
   }
 }
-
-function renderJob(job) {
-  const e = job.el; if (!e) return;
-  e.actions.innerHTML = "";
-  e.barWrap.style.display = "none";
-  setIcon(e, job);
-
-  // ---- status / progress text ----
-  if (job.status === "reading") {
-    e.stat.style.color = "var(--muted)"; e.stat.textContent = "Reading…";
-    e.barWrap.style.display = "block"; e.bar.style.width = "4%";
-  } else if (job.status === "encoding") {
-    e.stat.style.color = "var(--muted)"; e.stat.textContent = (mode === "assemble" ? "Preparing… " : "Encoding… ") + (job.progress || 0) + "%";
-    e.barWrap.style.display = "block"; e.bar.style.width = (job.progress || 0) + "%";
-  } else if (job.status === "error") {
-    e.stat.style.color = "var(--bad)"; e.stat.textContent = job.error || "Failed";
-  } else if (job.status === "done" && mode === "each") {
-    e.stat.style.color = "var(--good)";
-    e.stat.textContent = "Done · " + [fmtDur(job.dur), job.dims || "1080p", fmtSize(job.size)].filter(Boolean).join(" · ");
-  } else { // queued (or assemble segments between runs)
-    e.stat.style.color = "var(--muted)";
-    if (mode === "assemble") {
-      const len = trimmedLen(job), trimmed = job.dur && Math.abs(len - job.dur) > 0.05;
-      e.stat.textContent = job.dur ? (trimmed ? "Length " + fmtDur(len) + " (trimmed from " + fmtDur(job.dur) + ")" : fmtDur(job.dur) + " · full") : "Ready";
-    } else {
-      const meta = [fmtDur(job.dur), fmtSize(job.file.size)].filter(Boolean).join(" · ");
-      e.stat.textContent = job.w && job.h ? "Ready · " + meta + " → " + targetDims(curPreset(), job.w, job.h) : "Ready · " + meta;
-    }
+async function generateScene(scene) {
+  if (!getKey()) { scene.error = "Add your Atlas API key first (step 1)."; scene.genStatus = "error"; renderScene(scene); return; }
+  if (!scene.image) { scene.error = "Add a first-frame photo first."; scene.genStatus = "error"; renderScene(scene); return; }
+  scene.error = ""; scene.genStatus = "uploading"; renderScene(scene); refreshBuild();
+  try {
+    const id = await atlasGenerate(scene);
+    scene.predId = id; scene.genStatus = "queued"; renderScene(scene);
+    const url = await atlasPoll(id, (st, secs) => { scene.genStatus = st || "processing"; scene.genSecs = secs; renderScene(scene); });
+    const vr = await fetch(url); if (!vr.ok) throw new Error("Couldn’t fetch result video (" + vr.status + ")");
+    const vb = await vr.blob();
+    scene.video = new File([vb], "scene" + scene.id + ".mp4", { type: "video/mp4" });
+    scene.videoThumb = await thumbOf(scene.video);
+    scene.genStatus = "done"; renderScene(scene);
+  } catch (e) {
+    scene.error = (e && e.message) ? e.message : String(e); scene.genStatus = "error"; renderScene(scene);
   }
-
-  // ---- action buttons ----
-  if (!running) {
-    if (mode === "assemble" && job.status !== "encoding" && job.status !== "reading") {
-      const ord = document.createElement("div"); ord.className = "qord";
-      const up = document.createElement("button"); up.textContent = "▲"; up.title = "Move up"; up.disabled = jobs.indexOf(job) === 0; up.onclick = () => moveJob(job, -1);
-      const dn = document.createElement("button"); dn.textContent = "▼"; dn.title = "Move down"; dn.disabled = jobs.indexOf(job) === jobs.length - 1; dn.onclick = () => moveJob(job, 1);
-      ord.append(up, dn);
-      const tr = document.createElement("button"); tr.className = "qbtn"; tr.textContent = "Trim"; tr.onclick = () => toggleTrim(job);
-      const rm = document.createElement("button"); rm.className = "qbtn"; rm.textContent = "✕"; rm.title = "Remove"; rm.onclick = () => removeJob(job);
-      e.actions.append(ord, tr, rm);
-    } else if (mode === "each") {
-      if (job.status === "done") {
-        const sv = document.createElement("button"); sv.className = "qbtn save"; sv.textContent = "Save"; sv.onclick = () => saveBlob(job.blob, job.outName); e.actions.appendChild(sv);
-        const pv = document.createElement("button"); pv.className = "qbtn"; pv.textContent = "▶"; pv.title = "Preview"; pv.onclick = () => preview(job); e.actions.appendChild(pv);
-      } else {
-        const rm = document.createElement("button"); rm.className = "qbtn"; rm.textContent = "✕"; rm.title = "Remove"; rm.onclick = () => removeJob(job); e.actions.appendChild(rm);
-      }
-    }
-  }
-
-  if (e.trim) e.trim.style.display = (mode === "assemble" && job.trimOpen && job.dur) ? "block" : "none";
+  refreshBuild();
 }
 
-$("drop").onclick = () => $("fileInput").click();
-$("fileInput").onchange = (e) => { addFiles(e.target.files); e.target.value = ""; };
-["dragover", "dragenter"].forEach((ev) => $("drop").addEventListener(ev, (e) => e.preventDefault()));
-$("drop").addEventListener("drop", (e) => { e.preventDefault(); addFiles(e.dataTransfer.files); });
+// ---------- scenes UI ----------
+function addScene() { scenes.push({ id: idSeq++, image: null, imageThumb: null, refImage: null, refThumb: null, prompt: "", video: null, videoThumb: null, genStatus: "idle", genSecs: 0, predId: null, error: "", el: null }); renderScenes(); refreshBuild(); }
+function removeScene(sc) { scenes = scenes.filter((s) => s !== sc); renderScenes(); refreshBuild(); }
+function moveScene(sc, dir) { const i = scenes.indexOf(sc), j = i + dir; if (j < 0 || j >= scenes.length) return; scenes[i] = scenes[j]; scenes[j] = sc; renderScenes(); refreshBuild(); }
 
+function makeDrop(sc, field, thumbField, label, accept) {
+  const d = document.createElement("div"); d.className = "drop";
+  const lbl = document.createElement("span"); lbl.className = "dlabel"; lbl.textContent = label;
+  const inp = document.createElement("input"); inp.type = "file"; inp.accept = accept; inp.hidden = true;
+  d.append(lbl, inp);
+  const paint = () => {
+    const t = sc[thumbField];
+    d.querySelectorAll("img,.clear").forEach((x) => x.remove());
+    if (t) {
+      const im = document.createElement("img"); im.src = t; d.appendChild(im);
+      const cl = document.createElement("button"); cl.className = "clear"; cl.textContent = "✕";
+      cl.onclick = (e) => { e.stopPropagation(); sc[field] = null; sc[thumbField] = null; paint(); refreshBuild(); };
+      d.appendChild(cl); lbl.style.display = "none";
+    } else lbl.style.display = "";
+  };
+  d.onclick = () => inp.click();
+  inp.onchange = async (e) => { const f = e.target.files[0]; e.target.value = ""; if (!f) return; sc[field] = f; sc[thumbField] = await thumbOf(f); paint(); refreshBuild(); };
+  paint();
+  return d;
+}
+
+function renderScenes() {
+  const c = $("scenes"); c.innerHTML = "";
+  if (!scenes.length) { addSceneSilently(); }
+  scenes.forEach((sc, idx) => {
+    const card = document.createElement("div"); card.className = "scene";
+    const head = document.createElement("div"); head.className = "scenehead";
+    const title = document.createElement("span"); title.className = "scenetitle"; title.textContent = "Scene " + (idx + 1);
+    const ord = document.createElement("div"); ord.className = "qord";
+    const up = document.createElement("button"); up.textContent = "▲"; up.disabled = idx === 0 || building; up.onclick = () => moveScene(sc, -1);
+    const dn = document.createElement("button"); dn.textContent = "▼"; dn.disabled = idx === scenes.length - 1 || building; dn.onclick = () => moveScene(sc, 1);
+    ord.append(up, dn);
+    const rm = document.createElement("button"); rm.className = "iconbtn"; rm.textContent = "✕"; rm.disabled = building; rm.onclick = () => removeScene(sc);
+    head.append(title, ord, rm);
+
+    const drops = document.createElement("div"); drops.className = "drops";
+    drops.append(makeDrop(sc, "image", "imageThumb", "＋ First-frame photo", "image/*"),
+                 makeDrop(sc, "refImage", "refThumb", "＋ Reference (optional)", "image/*"));
+
+    const ta = document.createElement("textarea"); ta.placeholder = "Describe the video for this scene…"; ta.value = sc.prompt || ""; ta.oninput = () => sc.prompt = ta.value;
+
+    const actions = document.createElement("div"); actions.className = "scnactions";
+    const gen = document.createElement("button"); gen.textContent = "✨ Generate video"; gen.onclick = () => generateScene(sc);
+    const dropVidWrap = document.createElement("button"); dropVidWrap.className = "ghost"; dropVidWrap.textContent = "Use ready video";
+    const vidInput = document.createElement("input"); vidInput.type = "file"; vidInput.accept = "video/*"; vidInput.hidden = true;
+    dropVidWrap.onclick = () => vidInput.click();
+    vidInput.onchange = async (e) => { const f = e.target.files[0]; e.target.value = ""; if (!f) return; sc.video = f; sc.videoThumb = await thumbOf(f); sc.genStatus = "done"; sc.error = ""; renderScene(sc); refreshBuild(); };
+    actions.append(gen, dropVidWrap, vidInput);
+
+    const bar = document.createElement("div"); bar.className = "scnbar"; bar.appendChild(document.createElement("div"));
+    const stat = document.createElement("div"); stat.className = "scnstatus";
+    const vid = document.createElement("video"); vid.className = "scnvid"; vid.controls = true; vid.playsInline = true;
+
+    card.append(head, drops, ta, actions, bar, stat, vid);
+    c.appendChild(card);
+    sc.el = { gen, stat, bar, vid };
+    renderScene(sc);
+  });
+}
+function addSceneSilently() { scenes.push({ id: idSeq++, image: null, imageThumb: null, refImage: null, refThumb: null, prompt: "", video: null, videoThumb: null, genStatus: "idle", genSecs: 0, predId: null, error: "", el: null }); }
+
+function renderScene(sc) {
+  const e = sc.el; if (!e) return;
+  const busy = ["uploading", "queued", "processing", "starting", "running"].includes(sc.genStatus);
+  e.gen.disabled = building || busy || !getKey() || !sc.image;
+  e.bar.style.display = busy ? "block" : "none";
+  if (sc.genStatus === "done" && sc.video) {
+    e.stat.className = "scnstatus ok";
+    e.stat.textContent = "✓ Clip ready · " + fmtSize(sc.video.size);
+    if (!e.vid.src) e.vid.src = URL.createObjectURL(sc.video);
+    e.vid.style.display = "block"; e.gen.textContent = "✨ Re-generate";
+  } else if (sc.genStatus === "error") {
+    e.stat.className = "scnstatus bad"; e.stat.textContent = "⚠ " + (sc.error || "Failed"); e.vid.style.display = "none";
+  } else if (busy) {
+    const map = { uploading: "Uploading image…", queued: "Queued…", processing: "Generating…", starting: "Starting…", running: "Generating…" };
+    e.stat.className = "scnstatus"; e.stat.textContent = (map[sc.genStatus] || "Working…") + (sc.genSecs ? " (" + sc.genSecs + "s)" : "");
+    e.vid.style.display = "none";
+  } else { e.stat.className = "scnstatus"; e.stat.textContent = ""; e.vid.style.display = "none"; }
+}
+
+$("addScene").onclick = addScene;
+
+// ---------- music ----------
+$("musicDrop").onclick = () => $("musicInput").click();
+$("musicInput").onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; if (!f) return; musicFile = f; $("musicLabel").textContent = "🎵 " + f.name; };
+
+// ---------- ffmpeg engine ----------
 async function loadEngine() {
   if (engineReady) return;
   const { FFmpeg } = window.FFmpegWASM;
   ffmpeg = new FFmpeg();
   ffmpeg.on("progress", ({ progress }) => {
-    if (!currentJob || !Number.isFinite(progress)) return;
-    currentJob.progress = Math.max(0, Math.min(99, Math.round(progress * 100)));
-    renderJob(currentJob);
-    if (batchTotal > 0) {
-      const overall = Math.min(99, Math.round(((batchDone + currentJob.progress / 100) / batchTotal) * 100));
-      const eta = etaText();
-      const base = "Processing " + (batchDone + 1) + " of " + batchTotal;
-      setProgress(overall, eta ? base + " · " + eta : base + "…");
+    if (building && curStep && Number.isFinite(progress)) {
+      const p = Math.max(0, Math.min(99, Math.round(progress * 100)));
+      const overall = Math.min(99, Math.round(((curStep.done + p / 100) / curStep.total) * 100));
+      setProgress(overall, curStep.label + " " + p + "%");
     }
   });
   $("engineState").textContent = "Loading video engine (~30 MB)…";
-  // No classWorkerURL: the lib then auto-creates a *classic* worker from the
-  // same folder as vendor/ffmpeg.js (same-origin), where importScripts works.
-  await ffmpeg.load({
-    coreURL: VENDOR + "ffmpeg-core.js",
-    wasmURL: VENDOR + "ffmpeg-core.wasm",
-  });
-  engineReady = true;
-  $("engineState").textContent = "Engine ready ✓";
+  await ffmpeg.load({ coreURL: VENDOR + "ffmpeg-core.js", wasmURL: VENDOR + "ffmpeg-core.wasm" });
+  engineReady = true; $("engineState").textContent = "";
+}
+async function probeHasAudio(name) {
+  const buf = []; const h = ({ message }) => buf.push(message);
+  ffmpeg.on("log", h); try { await ffmpeg.exec(["-i", name]); } catch {} ffmpeg.off("log", h);
+  return buf.some((m) => /Stream #\d+:\d+.*Audio:/i.test(m));
 }
 
-function buildArgs(preset, crf, inName, outName, w, h) {
-  let vf;
-  if (preset === "auto") {
-    // Match the source orientation so we never add black bars.
-    if (w && h && h > w) vf = "scale=1080:-2:flags=lanczos,setsar=1";       // vertical   -> 1080 wide
-    else if (w && h && w > h) vf = "scale=-2:1080:flags=lanczos,setsar=1";  // horizontal -> 1080 tall
-    else if (w && h) vf = "scale=1080:1080:flags=lanczos,setsar=1";         // square
-    else vf = "scale=-2:1080:flags=lanczos,setsar=1";                       // unknown    -> 1080 tall, no bars
-  } else if (preset === "fit") {
-    vf = "scale=-2:1080:flags=lanczos,setsar=1";
-  } else {
-    const [W, H] = { landscape: [1920, 1080], portrait: [1080, 1920], square: [1080, 1080] }[preset];
-    vf = `scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
-         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
-  }
-  return [
-    "-i", inName, "-vf", vf,
-    "-c:v", "libx264", "-crf", String(crf), "-preset", "medium",
-    "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-    "-c:a", "aac", "-b:a", "192k",
-    outName,
-  ];
-}
-
-async function processJob(job, fetchFile, preset, crf) {
-  const ext = (job.name.split(".").pop() || "mp4").toLowerCase().replace(/[^a-z0-9]/g, "") || "mp4";
-  const inName = "in_" + job.id + "." + ext;
-  const outFs = "out_" + job.id + ".mp4";
-  job.status = "reading"; renderJob(job);
-  await ffmpeg.writeFile(inName, await fetchFile(job.file));
-
-  job.dims = targetDims(preset, job.w, job.h);
-  job.status = "encoding"; job.progress = 0; renderJob(job);
-  currentJob = job;
-  const t0 = performance.now();
-  try {
-    await ffmpeg.exec(buildArgs(preset, crf, inName, outFs, job.w, job.h));
-  } finally {
-    currentJob = null;
-  }
-  encMs += performance.now() - t0; encSec += job.dur || 0; // calibrate ETA from real timings
-  const data = await ffmpeg.readFile(outFs);
-  job.blob = new Blob([data.buffer], { type: "video/mp4" });
-  job.size = job.blob.size;
-  try { await ffmpeg.deleteFile(inName); await ffmpeg.deleteFile(outFs); } catch {}
-  job.status = "done"; renderJob(job);
-}
-
-$("go").onclick = async () => {
-  if (running) return;
-  if (mode === "assemble") return assembleAll();
-  const pending = jobs.filter((j) => j.status === "queued" || j.status === "error");
-  if (!pending.length) return;
-  running = true;
-  $("preset").disabled = $("crf").disabled = true;
-  $("errBox").style.display = "none";
-  $("progWrap").style.display = "block";
-  renderQueue(); // drop the per-row remove buttons while running
-  refreshControls();
+// ---------- assemble + upscale ----------
+let curStep = null;
+async function build() {
+  if (building) return;
+  const clips = scenes.filter((s) => s.video);
+  if (!clips.length) { fail("No scene clips yet — generate or add at least one video."); return; }
+  building = true; finalBlob = null;
+  $("build").disabled = true; $("result").style.display = "none"; $("errBox").style.display = "none";
+  $("progWrap").style.display = "block"; renderScenes();
   setProgress(0, "Loading engine…");
-
-  try {
-    await loadEngine();
-  } catch (e) {
-    fail("Couldn’t load the video engine: " + (e.message || e));
-    running = false; $("preset").disabled = $("crf").disabled = false; refreshControls();
-    return;
-  }
+  try { await loadEngine(); } catch (e) { fail("Couldn’t load engine: " + (e.message || e)); building = false; $("build").disabled = false; renderScenes(); return; }
 
   const { fetchFile } = window.FFmpegUtil;
-  const preset = curPreset(), crf = $("crf").value;
-  batchTotal = pending.length; batchDone = 0;
-  encMs = 0; encSec = 0; // recalibrate ETA for this run
-
-  for (let i = 0; i < pending.length; i++) {
-    const job = pending[i];
-    batchDone = i;
-    const eta = etaText();
-    const base = "Processing " + (i + 1) + " of " + batchTotal;
-    setProgress(Math.round((i / batchTotal) * 100), eta ? base + " · " + eta : base + "…");
-    try {
-      await processJob(job, fetchFile, preset, crf);
-    } catch (err) {
-      job.status = "error"; job.error = friendlyErr(err); renderJob(job);
+  const total = clips.length + 1; // segments + concat (music adds within concat step)
+  const segs = [];
+  try {
+    for (let i = 0; i < clips.length; i++) {
+      curStep = { done: i, total, label: "Upscaling clip " + (i + 1) + " of " + clips.length + "…" };
+      setProgress(Math.round((i / total) * 100), curStep.label);
+      const inName = "in_" + clips[i].id + ".mp4", seg = "seg_" + i + ".ts";
+      await ffmpeg.writeFile(inName, await fetchFile(clips[i].video));
+      const hasA = await probeHasAudio(inName);
+      const vf = `[0:v]scale=${CANVAS_W}:${CANVAS_H}:force_original_aspect_ratio=decrease,pad=${CANVAS_W}:${CANVAS_H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v]`;
+      // veryfast: at a fixed CRF the preset only trades encode-time vs file size, NOT
+      // visual quality — so we keep CRF 18 (visually lossless) but encode much faster.
+      const tail = ["-c:v", "libx264", "-crf", String(CRF), "-preset", "veryfast", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-f", "mpegts", seg];
+      const args = hasA
+        ? ["-i", inName, "-filter_complex", vf + ";[0:a]aresample=48000,aformat=channel_layouts=stereo[a]", "-map", "[v]", "-map", "[a]", ...tail]
+        : ["-i", inName, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", vf, "-map", "[v]", "-map", "1:a", "-shortest", ...tail];
+      await ffmpeg.exec(args);
+      segs.push(seg);
+      try { await ffmpeg.deleteFile(inName); } catch {}
     }
-    refreshControls();
-  }
+    curStep = null;
+    setProgress(Math.round((clips.length / total) * 100), musicFile ? "Stitching + adding music…" : "Stitching together…");
+    await ffmpeg.writeFile("list.txt", segs.map((s) => "file '" + s + "'").join("\n") + "\n");
+    await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "-movflags", "+faststart", "stitched.mp4"]);
 
-  const okCount = jobs.filter((j) => j.status === "done").length;
-  setProgress(100, batchTotal > 1 ? "Finished — " + okCount + " ready" : "Complete");
-  running = false;
-  $("preset").disabled = $("crf").disabled = false;
-  renderQueue(); // restore remove buttons on any still-queued items
-  refreshControls();
-};
-
-function refreshControls() {
-  const pending = jobs.filter((j) => j.status === "queued" || j.status === "error").length;
-  const doneN = jobs.filter((j) => j.status === "done").length;
-  if (mode === "assemble") {
-    $("go").disabled = running || jobs.length < 2;
-    $("go").textContent = running ? "Working…" : "Stitch " + jobs.length + " clips → 1080p";
-    $("saveAll").style.display = $("downloadAll").style.display = $("saveNote").style.display = "none";
-  } else {
-    $("go").disabled = running || pending === 0;
-    $("go").textContent = running ? "Working…" : pending > 1 ? "Upscale " + pending + " videos" : "Upscale to 1080p";
-    $("saveAll").style.display = doneN > 1 ? "block" : "none";
-    $("saveAll").textContent = "⬇ Save all " + doneN + " to Photos / apps";
-    $("downloadAll").style.display = doneN > 1 ? "block" : "none";
-    $("downloadAll").textContent = "⬇ Download all " + doneN + " as .zip";
-    $("saveNote").style.display = doneN >= 1 ? "block" : "none";
-    $("asmResult").style.display = "none";
+    let outName = "stitched.mp4";
+    if (musicFile) {
+      const mExt = (musicFile.name.split(".").pop() || "mp3").replace(/[^a-z0-9]/gi, "") || "mp3";
+      const mName = "music." + mExt;
+      await ffmpeg.writeFile(mName, await fetchFile(musicFile));
+      await ffmpeg.exec(["-i", "stitched.mp4", "-stream_loop", "-1", "-i", mName,
+        "-filter_complex", "[1:a]aresample=48000,aformat=channel_layouts=stereo,volume=0.35[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=0[a]",
+        "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "final.mp4"]);
+      outName = "final.mp4";
+      try { await ffmpeg.deleteFile(mName); } catch {}
+    }
+    const data = await ffmpeg.readFile(outName);
+    finalBlob = new Blob([data.buffer], { type: "video/mp4" });
+    for (const s of segs) { try { await ffmpeg.deleteFile(s); } catch {} }
+    try { await ffmpeg.deleteFile("list.txt"); await ffmpeg.deleteFile("stitched.mp4"); await ffmpeg.deleteFile("final.mp4"); } catch {}
+  } catch (e) {
+    curStep = null; fail("Build failed: " + (e.message || e)); building = false; $("build").disabled = false; renderScenes(); return;
   }
-  updateSummary();
+  setProgress(100, "Done");
+  const dur = await durationOf(finalBlob);
+  $("resultInfo").textContent = "✓ " + clips.length + " scenes · " + (dur ? fmtDur(dur) + " · " : "") + CANVAS_W + "×" + CANVAS_H + " · " + fmtSize(finalBlob.size);
+  $("finalVideo").src = URL.createObjectURL(finalBlob);
+  $("result").style.display = "block";
+  building = false; $("build").disabled = false; renderScenes();
+  $("result").scrollIntoView({ behavior: "smooth", block: "start" });
 }
+function durationOf(blob) { return new Promise((res) => { const v = document.createElement("video"); v.preload = "metadata"; v.onloadedmetadata = () => res(v.duration); v.onerror = () => res(0); setTimeout(() => res(0), 4000); v.src = URL.createObjectURL(blob); }); }
+$("build").onclick = build;
 
-function updateSummary() {
-  const n = jobs.length;
-  const tools = $("queueTools");
-  if (!n) { $("queueSummary").textContent = ""; tools.style.display = "none"; return; }
-  tools.style.display = "flex";
-  $("clearAll").disabled = running;
-  if (mode === "assemble") {
-    $("clearDone").style.display = "none";
-    const totLen = jobs.reduce((a, j) => a + (trimmedLen(j) || j.dur || 0), 0);
-    let s = n + (n > 1 ? " clips" : " clip");
-    if (totLen) s += " · final ≈ " + fmtDur(totLen);
-    $("queueSummary").textContent = s;
-    return;
-  }
-  $("clearDone").style.display = "";
-  const doneN = jobs.filter((j) => j.status === "done").length;
-  const totDur = jobs.reduce((a, j) => a + (j.dur || 0), 0);
-  const totOut = jobs.filter((j) => j.status === "done").reduce((a, j) => a + (j.size || 0), 0);
-  let s = n + (n > 1 ? " videos" : " video");
-  if (totDur) s += " · " + fmtDur(totDur) + " total";
-  if (doneN) s += " · " + doneN + " done (" + fmtSize(totOut) + ")";
-  $("queueSummary").textContent = s;
-  $("clearDone").disabled = running || doneN === 0;
-}
+function refreshBuild() { const n = scenes.filter((s) => s.video).length; $("build").disabled = building || n === 0; $("build").textContent = n > 0 ? "Assemble & upscale " + n + " scene" + (n > 1 ? "s" : "") + " → 1080p" : "Assemble & upscale to 1080p"; }
 
-$("clearDone").onclick = () => {
-  if (running) return;
-  jobs = jobs.filter((j) => j.status !== "done");
-  $("previewWrap").style.display = "none";
-  renderQueue(); updatePresetHint(); refreshControls();
-};
-$("clearAll").onclick = () => {
-  if (running) return;
-  jobs = [];
-  assembledBlob = null;
-  $("previewWrap").style.display = "none";
-  $("asmResult").style.display = "none";
-  renderQueue(); updatePresetHint(); refreshControls();
-};
-
+// ---------- result actions ----------
 async function saveBlob(blob, name) {
-  const f = new File([blob], name, { type: "video/mp4" });
-  if (navigator.canShare && navigator.canShare({ files: [f] })) {
-    try { await navigator.share({ files: [f], title: name }); return; } catch { return; }
-  }
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 15000);
+  const f = new File([blob], name, { type: blob.type || "video/mp4" });
+  if (navigator.canShare && navigator.canShare({ files: [f] })) { try { await navigator.share({ files: [f], title: name }); return; } catch { return; } }
+  downloadBlob(blob, name);
 }
-
-$("saveAll").onclick = async () => {
-  const done = jobs.filter((j) => j.status === "done" && j.blob);
-  if (!done.length) return;
-  const files = done.map((j) => new File([j.blob], j.outName, { type: "video/mp4" }));
-  if (navigator.canShare && navigator.canShare({ files })) {
-    try { await navigator.share({ files, title: done.length + " videos (1080p)" }); return; } catch { return; }
-  }
-  for (const j of done) { await saveBlob(j.blob, j.outName); await new Promise((r) => setTimeout(r, 400)); }
+function downloadBlob(blob, name) { const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 20000); }
+$("saveFinal").onclick = () => { if (finalBlob) saveBlob(finalBlob, "viral_video_1080p.mp4"); };
+$("downloadFinal").onclick = () => { if (finalBlob) downloadBlob(finalBlob, "viral_video_1080p.mp4"); };
+$("downloadAll").onclick = async () => {
+  if (!finalBlob) return;
+  const btn = $("downloadAll"), lbl = btn.textContent; btn.disabled = true; btn.textContent = "Zipping…";
+  try {
+    const items = [{ name: "viral_video_1080p.mp4", blob: finalBlob }];
+    scenes.forEach((s, i) => {
+      if (s.video) items.push({ name: "clips/scene" + (i + 1) + ".mp4", blob: s.video });
+      if (s.image) items.push({ name: "images/scene" + (i + 1) + "_" + safeName(s.image.name), blob: s.image });
+      if (s.refImage) items.push({ name: "images/scene" + (i + 1) + "_ref_" + safeName(s.refImage.name), blob: s.refImage });
+    });
+    if (musicFile) items.push({ name: "music_" + safeName(musicFile.name), blob: musicFile });
+    const zip = await buildZip(items);
+    downloadBlob(zip, "viral_video_project.zip");
+  } catch (e) { fail("Zip failed: " + (e.message || e)); }
+  finally { btn.disabled = false; btn.textContent = lbl; }
 };
 
-// ---- Estimated time remaining, calibrated from real encode timings ----
-function etaText() {
-  if (encSec <= 0) return "";
-  const rate = encMs / encSec; // ms of encoding per source-second
-  let remSec = jobs.filter((j) => j.status === "queued" || j.status === "encoding").reduce((a, j) => a + (j.dur || 0), 0);
-  if (currentJob && currentJob.dur) remSec -= ((currentJob.progress || 0) / 100) * currentJob.dur;
-  const ms = remSec * rate;
-  if (ms <= 1000) return "";
-  const s = Math.round(ms / 1000);
-  return s < 60 ? "~" + s + "s left" : "~" + Math.ceil(s / 60) + " min left";
-}
-
-// ---- "Download all" as a single .zip (store, no compression) ----
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
-  return t;
-})();
+// ---------- zip (store) ----------
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
 function crc32(u8) { let c = ~0; for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xff] ^ (c >>> 8); return (~c) >>> 0; }
-
 async function buildZip(items) {
-  const enc = new TextEncoder();
-  const parts = [], central = []; let offset = 0;
+  const enc = new TextEncoder(); const parts = [], central = []; let offset = 0;
   for (const it of items) {
-    const data = new Uint8Array(await it.blob.arrayBuffer());
-    const nameB = enc.encode(it.name);
+    const data = new Uint8Array(await it.blob.arrayBuffer()); const nameB = enc.encode(it.name);
     const crc = crc32(data), size = data.length;
     const lh = new DataView(new ArrayBuffer(30));
     lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true);
-    lh.setUint32(14, crc, true); lh.setUint32(18, size, true); lh.setUint32(22, size, true);
-    lh.setUint16(26, nameB.length, true);
+    lh.setUint32(14, crc, true); lh.setUint32(18, size, true); lh.setUint32(22, size, true); lh.setUint16(26, nameB.length, true);
     parts.push(new Uint8Array(lh.buffer), nameB, data);
     const ch = new DataView(new ArrayBuffer(46));
     ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
-    ch.setUint32(16, crc, true); ch.setUint32(20, size, true); ch.setUint32(24, size, true);
-    ch.setUint16(28, nameB.length, true); ch.setUint32(42, offset, true);
+    ch.setUint32(16, crc, true); ch.setUint32(20, size, true); ch.setUint32(24, size, true); ch.setUint16(28, nameB.length, true); ch.setUint32(42, offset, true);
     central.push(new Uint8Array(ch.buffer), nameB);
     offset += 30 + nameB.length + size;
   }
   let cSize = 0; for (const p of central) cSize += p.length;
   const eocd = new DataView(new ArrayBuffer(22));
-  eocd.setUint32(0, 0x06054b50, true);
-  eocd.setUint16(8, items.length, true); eocd.setUint16(10, items.length, true);
+  eocd.setUint32(0, 0x06054b50, true); eocd.setUint16(8, items.length, true); eocd.setUint16(10, items.length, true);
   eocd.setUint32(12, cSize, true); eocd.setUint32(16, offset, true);
   return new Blob([...parts, ...central, new Uint8Array(eocd.buffer)], { type: "application/zip" });
 }
 
-$("downloadAll").onclick = async () => {
-  const done = jobs.filter((j) => j.status === "done" && j.blob);
-  if (!done.length) return;
-  const btn = $("downloadAll"), label = btn.textContent;
-  btn.disabled = true; btn.textContent = "Zipping…";
-  try {
-    const zip = await buildZip(done.map((j) => ({ name: j.outName, blob: j.blob })));
-    const url = URL.createObjectURL(zip);
-    const a = document.createElement("a");
-    a.href = url; a.download = "upscaled_1080p.zip"; document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 20000);
-  } catch (e) {
-    fail("Couldn’t build the zip: " + (e.message || e));
-  } finally {
-    btn.disabled = false; btn.textContent = label;
-  }
-};
+// ---------- progress / errors ----------
+function setProgress(p, text) { $("barFill").style.width = p + "%"; $("pct").textContent = p + "%"; $("statusText").textContent = text; }
+function fail(msg) { $("progWrap").style.display = "none"; $("errBox").style.display = "block"; $("errBox").textContent = "⚠ " + msg; }
 
-function preview(job) {
-  const v = $("outVideo");
-  v.src = URL.createObjectURL(job.blob);
-  $("previewWrap").style.display = "block";
-  v.scrollIntoView({ behavior: "smooth", block: "center" });
-}
-
-function setProgress(p, text) {
-  $("barFill").style.width = p + "%";
-  $("pct").textContent = p + "%";
-  $("statusText").textContent = text;
-}
-function friendlyErr(err) {
-  let m = err && err.message ? err.message : String(err);
-  const l = m.toLowerCase();
-  if (l.includes("memory") || l.includes("abort") || l.includes("oom")) return "Out of memory — clip too large for this device";
-  if (l.includes("errno") || l.includes("fs error") || l.includes("no such file")) return "Couldn’t read this file — unsupported or corrupt video";
-  return "Failed — " + m.slice(0, 80);
-}
-function fail(msg) {
-  $("progWrap").style.display = "none";
-  $("errBox").style.display = "block";
-  $("errBox").textContent = "⚠ " + msg;
-}
-
-// Service worker: offline / home-screen use + "update available" prompt.
+// ---------- service worker + update toast ----------
 if ("serviceWorker" in navigator) {
-  const hadController = !!navigator.serviceWorker.controller;
-  let swRefreshing = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (swRefreshing) return; swRefreshing = true;
-    if (hadController) location.reload(); // only auto-reload on a genuine update, not first install
-  });
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").then((reg) => {
-      if (reg.waiting && navigator.serviceWorker.controller) showUpdate(reg);
-      reg.addEventListener("updatefound", () => {
-        const nw = reg.installing;
-        if (!nw) return;
-        nw.addEventListener("statechange", () => {
-          if (nw.state === "installed" && navigator.serviceWorker.controller) showUpdate(reg);
-        });
-      });
-    }).catch(() => {});
-  });
+  const had = !!navigator.serviceWorker.controller; let refreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (refreshing) return; refreshing = true; if (had) location.reload(); });
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").then((reg) => {
+    if (reg.waiting && navigator.serviceWorker.controller) showUpdate(reg);
+    reg.addEventListener("updatefound", () => { const nw = reg.installing; if (!nw) return; nw.addEventListener("statechange", () => { if (nw.state === "installed" && navigator.serviceWorker.controller) showUpdate(reg); }); });
+  }).catch(() => {}));
 }
-function showUpdate(reg) {
-  const t = $("updateToast"); t.style.display = "flex";
-  $("updateBtn").onclick = () => {
-    t.style.display = "none";
-    if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
-    else location.reload();
-  };
-}
+function showUpdate(reg) { const t = $("updateToast"); t.style.display = "flex"; $("updateBtn").onclick = () => { t.style.display = "none"; if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" }); else location.reload(); }; }
+
+// ---------- init ----------
+refreshKeyStatus();
+renderScenes();
+refreshBuild();
 </script>
 </body>
 </html>
