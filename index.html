@@ -59,7 +59,11 @@
   .scnbar > div { height: 100%; width: 30%; background: linear-gradient(90deg, var(--accent), var(--good)); }
   .scnactions { display: flex; gap: 8px; margin-top: 10px; }
   .scnactions button { margin: 0; }
-  .scnvid { width: 100%; border-radius: 8px; border: 1px solid var(--border); background: #000; margin-top: 10px; display: none; }
+  .scenebody { display: flex; gap: 12px; align-items: flex-start; }
+  .scnmain { flex: 1; min-width: 0; }
+  .scnpreview { width: 92px; flex-shrink: 0; }
+  .scnvid { width: 92px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); background: #000; display: none; }
+  .scnph { width: 92px; aspect-ratio: 9 / 16; border: 1px dashed var(--border); border-radius: 8px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 10px; color: var(--muted); padding: 4px; }
   .progress-wrap { display: none; margin-top: 14px; }
   .bar { height: 10px; background: #0d1117; border: 1px solid var(--border); border-radius: 99px; overflow: hidden; }
   .bar > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--good)); transition: width .2s; }
@@ -293,11 +297,19 @@ function renderScenes() {
 
     const bar = document.createElement("div"); bar.className = "scnbar"; bar.appendChild(document.createElement("div"));
     const stat = document.createElement("div"); stat.className = "scnstatus";
-    const vid = document.createElement("video"); vid.className = "scnvid"; vid.controls = true; vid.playsInline = true;
 
-    card.append(head, drops, ta, actions, bar, stat, vid);
+    const body = document.createElement("div"); body.className = "scenebody";
+    const mainCol = document.createElement("div"); mainCol.className = "scnmain";
+    mainCol.append(drops, ta, actions, bar, stat);
+    const preview = document.createElement("div"); preview.className = "scnpreview";
+    const ph = document.createElement("div"); ph.className = "scnph"; ph.textContent = "Preview";
+    const vid = document.createElement("video"); vid.className = "scnvid"; vid.controls = true; vid.playsInline = true;
+    preview.append(ph, vid);
+    body.append(mainCol, preview);
+
+    card.append(head, body);
     c.appendChild(card);
-    sc.el = { gen, stat, bar, vid };
+    sc.el = { gen, stat, bar, vid, ph };
     renderScene(sc);
   });
 }
@@ -312,14 +324,14 @@ function renderScene(sc) {
     e.stat.className = "scnstatus ok";
     e.stat.textContent = "✓ Clip ready · " + fmtSize(sc.video.size);
     if (!e.vid.src) e.vid.src = URL.createObjectURL(sc.video);
-    e.vid.style.display = "block"; e.gen.textContent = "✨ Re-generate";
+    e.vid.style.display = "block"; e.ph.style.display = "none"; e.gen.textContent = "✨ Re-generate";
   } else if (sc.genStatus === "error") {
-    e.stat.className = "scnstatus bad"; e.stat.textContent = "⚠ " + (sc.error || "Failed"); e.vid.style.display = "none";
+    e.stat.className = "scnstatus bad"; e.stat.textContent = "⚠ " + (sc.error || "Failed"); e.vid.style.display = "none"; e.ph.style.display = "";
   } else if (busy) {
     const map = { uploading: "Uploading image…", queued: "Queued…", processing: "Generating…", starting: "Starting…", running: "Generating…" };
     e.stat.className = "scnstatus"; e.stat.textContent = (map[sc.genStatus] || "Working…") + (sc.genSecs ? " (" + sc.genSecs + "s)" : "");
-    e.vid.style.display = "none";
-  } else { e.stat.className = "scnstatus"; e.stat.textContent = ""; e.vid.style.display = "none"; }
+    e.vid.style.display = "none"; e.ph.style.display = "";
+  } else { e.stat.className = "scnstatus"; e.stat.textContent = ""; e.vid.style.display = "none"; e.ph.style.display = ""; }
 }
 
 $("addScene").onclick = addScene;
