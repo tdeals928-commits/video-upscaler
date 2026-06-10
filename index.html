@@ -105,7 +105,7 @@
         <input id="apiBase" type="text" placeholder="https://api.atlascloud.ai/api/v1" autocomplete="off" autocapitalize="off" spellcheck="false" />
         <button class="small" id="baseSave" type="button">Save</button>
       </div>
-      <div class="hint" style="margin-top:6px">Only if your browser/network blocks Atlas directly: point this at <b>your own</b> relay (e.g. a Cloudflare Worker that forwards to <code>api.atlascloud.ai</code> and adds permissive CORS). Leave blank to call Atlas directly.</div>
+      <div class="hint" style="margin-top:6px">Only if your browser/network blocks Atlas directly. <b>On your Mac:</b> run <code>node serve.js</code> in the project folder, then set this to <code>http://localhost:4100/api/v1</code> — calls go server-side from your Mac (immune to browser blockers). Or point it at your own Cloudflare Worker relay. Leave blank to call Atlas directly.</div>
     </details>
   </div>
 
