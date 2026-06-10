@@ -358,8 +358,9 @@ async function atlasUpload(file) {
   // uploadMedia is network-blocked but JSON calls work → embed the image inline (Atlas accepts URL or base64).
   if (netFail) return await blobToDataURL(f);
 }
-// No multipart upload — the image is sent inline (base64) in the JSON call, and
-// shrunk automatically until the request slips under any request-size limit.
+// Preferred: upload the image via uploadMedia and pass a hosted URL (the path the
+// official examples use). Inline base64 is only a last-resort fallback — jobs
+// submitted with inline images were observed to sit in "processing" indefinitely.
 async function atlasGenerate(scene, onSize) {
   const bare = (s) => (typeof s === "string" && s.startsWith("data:")) ? s.replace(/^data:[^,]*,/, "") : s;
   const send = async (img, lastImg) => {
@@ -368,7 +369,36 @@ async function atlasGenerate(scene, onSize) {
     const r = await fetch(atlasBase() + "/model/generateVideo", { method: "POST", headers: { Authorization: "Bearer " + getKey(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return { r, text: await r.text() };
   };
-  const sizes = [1024, 640, 384]; // progressively smaller first-frame image
+  const parseSubmit = (r, text) => {
+    if (!r.ok) {
+      if (r.status === 404 && /not found/i.test(text)) throw new Error("Atlas rejected the request (404). This almost always means the API key is wrong — make sure Step 1 holds your Atlas key (not a URL), pasted in full. It can also mean your account lacks access to this model.");
+      if (r.status === 401 || r.status === 403) throw new Error("Atlas auth failed (" + r.status + "). Re-check your API key in Step 1.");
+      throw new Error("Generate failed (" + r.status + "): " + text.slice(0, 240));
+    }
+    let j; try { j = JSON.parse(text); } catch { throw new Error("Generate returned non-JSON: " + text.slice(0, 160)); }
+    const id = deepFindId(j);
+    console.log("[atlas] submit response", JSON.stringify(j).slice(0, 300), "→ extracted id:", id);
+    if (!id) throw new Error("No prediction id in response → " + JSON.stringify(j).slice(0, 220));
+    return id;
+  };
+
+  // --- Path 1: hosted URL via uploadMedia (official flow) ---
+  try {
+    const hosted = await atlasUpload(scene.image);
+    if (hosted && !hosted.startsWith("data:")) {
+      let hostedLast = null;
+      if (scene.refImage) { try { const h = await atlasUpload(scene.refImage); if (h && !h.startsWith("data:")) hostedLast = h; } catch {} }
+      console.log("[atlas] image sent as hosted URL:", hosted.slice(0, 100));
+      const { r, text } = await send(hosted, hostedLast);
+      return parseSubmit(r, text);
+    }
+    console.warn("[atlas] uploadMedia network-blocked → inline base64 fallback");
+  } catch (e) {
+    console.warn("[atlas] uploadMedia failed (" + (e && e.message ? e.message : e) + ") → inline base64 fallback");
+  }
+
+  // --- Path 2 (fallback): inline base64, shrinking until the request gets through ---
+  const sizes = [1024, 640, 384];
   let netErr = null;
   for (let i = 0; i < sizes.length; i++) {
     if (onSize) onSize(sizes[i], i);
@@ -378,18 +408,10 @@ async function atlasGenerate(scene, onSize) {
       last = scene.refImage ? await imageToDataURL(scene.refImage, sizes[i]) : null;
     } catch (e) { throw new Error("Couldn’t read the image: " + (e.message || e)); }
     try {
+      console.log("[atlas] image sent as inline base64 (" + sizes[i] + "px, " + Math.round(img.length / 1024) + " KB)");
       let { r, text } = await send(img, last);
       if (!r.ok && r.status === 400 && img.startsWith("data:")) ({ r, text } = await send(bare(img), bare(last))); // some APIs want bare base64
-      if (!r.ok) {
-        if (r.status === 404 && /not found/i.test(text)) throw new Error("Atlas rejected the request (404). This almost always means the API key is wrong — make sure Step 1 holds your Atlas key (not a URL), pasted in full. It can also mean your account lacks access to this model.");
-        if (r.status === 401 || r.status === 403) throw new Error("Atlas auth failed (" + r.status + "). Re-check your API key in Step 1.");
-        throw new Error("Generate failed (" + r.status + "): " + text.slice(0, 240));
-      }
-      let j; try { j = JSON.parse(text); } catch { throw new Error("Generate returned non-JSON: " + text.slice(0, 160)); }
-      const id = deepFindId(j);
-      console.log("[atlas] submit response", JSON.stringify(j).slice(0, 300), "→ extracted id:", id);
-      if (!id) throw new Error("No prediction id in response → " + JSON.stringify(j).slice(0, 220));
-      return id;
+      return parseSubmit(r, text);
     } catch (e) {
       if (e instanceof TypeError) { netErr = e; continue; } // network dropped this body size — shrink and retry
       throw e; // real HTTP/API error → surface it
@@ -402,7 +424,7 @@ async function atlasPoll(id, onTick) {
   const DONE = ["completed", "succeeded", "success", "done", "finished", "ready"];
   const FAIL = ["failed", "error", "canceled", "cancelled", "rejected"];
   const TRANSIENT = [401, 403, 408, 425, 429, 500, 502, 503, 504]; // submit proved the key works → ride these out
-  let last = "", notFound = 0;
+  let last = "", notFound = 0, warnedSlow = false;
   for (;;) {
     await sleep(4000);
     let r;
@@ -421,8 +443,12 @@ async function atlasPoll(id, onTick) {
     notFound = 0;
     const j = await r.json(); const d = j.data || j;
     const st = (d.status || "").toLowerCase(); if (st) last = st;
-    console.log("[atlas] poll", id, "→", st || "(no status)", JSON.stringify(d).slice(0, 240));
+    console.log("[atlas] poll", id, "→", st || "(no status)");
     onTick(st || "processing", Math.round((Date.now() - started) / 1000));
+    if (!warnedSlow && st === "processing" && Date.now() - started > 5 * 60 * 1000) {
+      warnedSlow = true;
+      console.warn("[atlas] still processing after 5 min — an 8s clip normally takes 1–3 min. The Atlas queue may be busy or this job may be stuck; you can check it on your atlascloud.ai dashboard (prediction " + id + ").");
+    }
     const explicitOut = (d.outputs && d.outputs[0]) || d.output;
     if (DONE.includes(st) || explicitOut) {
       const out = explicitOut || pickVideoUrl(d);
@@ -432,7 +458,9 @@ async function atlasPoll(id, onTick) {
     if (FAIL.includes(st)) throw new Error("Generation " + st + (d.error ? ": " + (typeof d.error === "string" ? d.error : JSON.stringify(d.error)) : ""));
     if (Date.now() - started > 12 * 60 * 1000) break;
   }
-  throw new Error("Timed out after ~12 min — last status “" + (last || "(none)") + "” (check console for repeated 401s = throttling). (prediction " + id + ")");
+  throw new Error(last === "processing"
+    ? "Atlas still reports “processing” after 12 min — the job looks stuck on their side. Check prediction " + id + " on your atlascloud.ai dashboard (it may still finish and bill there), then try Generate again."
+    : "Timed out after ~12 min — last status “" + (last || "(none)") + "” (prediction " + id + ")");
 }
 async function generateScene(scene, force) {
   if (!scene.image) { scene.error = "Add a first-frame photo first."; scene.genStatus = "error"; renderScene(scene); return; }
