@@ -40,6 +40,17 @@ everything runs in the browser except an optional local relay (see below).
 - CORS: **verified** Atlas allows browser calls — preflight + actual responses
   echo the caller's origin (tested for both `localhost` and the github.io origin).
 
+## OpenAI product research (Step 2)
+- Key in `localStorage.openai_key`; calls go browser → `api.openai.com/v1/responses` (CORS verified OK).
+- Model ladder `gpt-5.5 → gpt-5.2 → gpt-5.1 → gpt-4o`: on "model not found" errors it
+  tries the next and remembers the working id in `localStorage.openai_model_ok`.
+- Flow: product photos (≤4, downscaled to 768px data-URIs) → vision identify (strict
+  JSON) → research prompt with `tools:[{type:"web_search"}]` (falls back to
+  `web_search_preview`, then no tools). Output extracted tolerantly (`oaText`).
+- Video types (`VID_TYPES`): growth30 (≈4 scenes), growth60 (≈8), product155 (≈19);
+  drives the scene-target pill + CTA guidance only — assembly is unchanged.
+- videoType / research / productPhotos persist in `creator_project` (photos in IDB).
+
 ## Caching (don't break this — it saves the user money)
 - Clip/image blobs in IndexedDB `creator-cache`/`blobs`; project structure in `localStorage.creator_project`.
 - Generation cache key = SHA-256 of image+prompt+ref+model/params (`sceneCacheKey`). Cache hit ⇒ zero Atlas calls ("cached (no charge)"). Re-generate on a done scene forces a paid run.

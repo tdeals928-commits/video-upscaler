@@ -82,6 +82,14 @@
   .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 50; background: #1b2430; border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px 10px 16px; display: flex; align-items: center; gap: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
   .toast span { font-size: 13px; } .toast button { width: auto; margin: 0; padding: 8px 14px; font-size: 13px; border-radius: 8px; }
   .pill { font-size: 11px; color: var(--muted); background: #0d1117; border: 1px solid var(--border); border-radius: 99px; padding: 3px 9px; }
+  .prodgrid { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; }
+  .ptile { width: 64px; height: 64px; border-radius: 8px; position: relative; overflow: hidden; border: 1px solid var(--border); background: #000; flex-shrink: 0; }
+  .ptile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .ptile .clear { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; margin: 0; border-radius: 50%; background: rgba(0,0,0,.65); border: none; color: #fff; font-size: 11px; line-height: 20px; z-index: 2; }
+  .padd { width: 64px; height: 64px; border: 2px dashed var(--border); border-radius: 8px; background: #0d1117; color: var(--muted); font-size: 22px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+  .research { margin-top: 12px; background: #0d1117; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .rhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .research pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text); max-height: 360px; overflow-y: auto; }
 </style>
 </head>
 <body>
@@ -108,11 +116,45 @@
       </div>
       <div class="hint" style="margin-top:6px">Only if your browser/network blocks Atlas directly. <b>On your Mac:</b> run <code>node serve.js</code> in the project folder, then set this to <code>http://localhost:4100/api/v1</code> — calls go server-side from your Mac (immune to browser blockers). Or point it at your own Cloudflare Worker relay. Leave blank to call Atlas directly.</div>
     </details>
+
+    <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px">
+      <label for="oaKey">OpenAI API key — for product research</label>
+      <div class="keyrow">
+        <input id="oaKey" type="password" placeholder="sk-... (paste your OpenAI key)" autocomplete="off" autocapitalize="off" spellcheck="false" />
+        <button class="small ghost" id="oaShow" type="button">Show</button>
+        <button class="small" id="oaSave" type="button">Save</button>
+      </div>
+      <div class="keystatus" id="oaStatus"></div>
+      <div class="hint">Used only for the product identify + deep-research step (sent directly to OpenAI, stored in this browser). Research calls bill your OpenAI account.</div>
+    </div>
   </div>
 
-  <!-- STEP 2: SCENES -->
+  <!-- STEP 2: VIDEO TYPE + PRODUCT RESEARCH -->
   <div class="card">
-    <div class="step">2 · Scenes <span class="pill">9:16 · 8s · 480p · audio on</span></div>
+    <div class="step">2 · Video type &amp; product research</div>
+    <label for="vidType">Video type</label>
+    <select id="vidType">
+      <option value="growth30">Growth — 30s · CTA: follow / engagement</option>
+      <option value="growth60">Growth — 1 min · CTA: follow / engagement</option>
+      <option value="product155">Product — ~2:35 · CTA: product</option>
+    </select>
+    <div class="hint" id="vidTypeHint"></div>
+
+    <label style="margin-top:14px">Product photos</label>
+    <div class="prodgrid" id="prodGrid"></div>
+    <input id="prodInput" type="file" accept="image/*" multiple hidden />
+    <button class="ghost" id="researchBtn" type="button" disabled>🔎 Identify &amp; deep-research product</button>
+    <div class="scnstatus" id="researchStatus"></div>
+    <div class="research" id="researchOut" style="display:none">
+      <div class="rhead"><b id="researchTitle">Research</b><button class="small ghost" id="researchCopy" type="button">Copy</button></div>
+      <pre id="researchText"></pre>
+    </div>
+    <div class="hint">Drop the product’s photos, then tap research: it identifies the product from the images, web-researches benefits, audience outcomes and the target audience, and writes CTA lines for both growth and product videos. Use the brief when writing your scene prompts.</div>
+  </div>
+
+  <!-- STEP 3: SCENES -->
+  <div class="card">
+    <div class="step">3 · Scenes <span class="pill">9:16 · 8s · 480p · audio on</span> <span class="pill" id="sceneTarget"></span></div>
     <div id="scenes"></div>
     <button class="ghost" id="addScene" type="button">＋ Add scene</button>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px">
@@ -123,7 +165,7 @@
 
   <!-- STEP 3: BUILD -->
   <div class="card">
-    <div class="step">3 · Assemble &amp; upscale</div>
+    <div class="step">4 · Assemble &amp; upscale</div>
     <label>Background music (optional)</label>
     <div class="drops">
       <div class="drop" id="musicDrop" style="min-height:60px">
@@ -143,7 +185,7 @@
 
   <!-- STEP 4: RESULT -->
   <div class="card" id="result" style="display:none">
-    <div class="step">4 · Your video</div>
+    <div class="step">5 · Your video</div>
     <div class="ok" id="resultInfo" style="font-weight:600;margin-bottom:10px"></div>
     <video id="finalVideo" controls playsinline></video>
     <button class="good" id="saveFinal" type="button">⬇ Save / Share final video</button>
@@ -177,6 +219,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let ffmpeg = null, engineReady = false, building = false;
 let scenes = [], idSeq = 1, musicFile = null, finalBlob = null;
+let productPhotos = [], research = "", researchName = "", researching = false, videoType = "growth30";
+
+// ---------- video types ----------
+const VID_TYPES = {
+  growth30:  { label: "Growth 30s",     secs: 30,  scenes: 4,  cta: "follow / engagement" },
+  growth60:  { label: "Growth 1 min",   secs: 60,  scenes: 8,  cta: "follow / engagement" },
+  product155:{ label: "Product ~2:35",  secs: 155, scenes: 19, cta: "product" },
+};
+// ---------- OpenAI (product research) ----------
+const OPENAI = "https://api.openai.com/v1";
+const OA_MODELS = ["gpt-5.5", "gpt-5.2", "gpt-5.1", "gpt-4o"]; // first id the account accepts wins; remembered
 
 // ---------- helpers ----------
 function fmtSize(b) { if (b == null) return ""; const u = ["B","KB","MB","GB"]; let i = 0; while (b >= 1024 && i < u.length-1) { b /= 1024; i++; } return b.toFixed(b < 10 && i > 0 ? 1 : 0) + " " + u[i]; }
@@ -247,7 +300,9 @@ function saveProject() {
   clearTimeout(_saveT);
   _saveT = setTimeout(() => {
     try {
-      const p = { scenes: scenes.map((s) => ({ prompt: s.prompt || "", imageKey: s.imageKey || null, imageName: s.image ? s.image.name : null, refKey: s.refKey || null, refName: s.refImage ? s.refImage.name : null, videoKey: s.videoKey || null })) };
+      const p = { videoType, research, researchName,
+                  productPhotos: productPhotos.map((x) => ({ key: x.key, name: x.name })),
+                  scenes: scenes.map((s) => ({ prompt: s.prompt || "", imageKey: s.imageKey || null, imageName: s.image ? s.image.name : null, refKey: s.refKey || null, refName: s.refImage ? s.refImage.name : null, videoKey: s.videoKey || null })) };
       localStorage.setItem("creator_project", JSON.stringify(p));
     } catch {}
     updateCacheInfo();
@@ -255,7 +310,18 @@ function saveProject() {
 }
 async function loadProject() {
   let p; try { p = JSON.parse(localStorage.getItem("creator_project") || "null"); } catch {}
-  if (!p || !Array.isArray(p.scenes) || !p.scenes.length) return false;
+  if (!p) return false;
+  // video type / research / product photos restore regardless of scenes
+  if (p.videoType && VID_TYPES[p.videoType]) videoType = p.videoType;
+  research = p.research || ""; researchName = p.researchName || "";
+  productPhotos = [];
+  for (const pp of p.productPhotos || []) {
+    if (!pp.key) continue;
+    const b = await idbGet(pp.key);
+    if (b) { const f = new File([b], pp.name || "product.jpg", { type: b.type || "image/jpeg" }); productPhotos.push({ file: f, name: f.name, thumb: await thumbOf(f), key: pp.key }); }
+  }
+  updateTypeUI(); renderProdPhotos(); renderResearch(); refreshResearchBtn();
+  if (!Array.isArray(p.scenes) || !p.scenes.length) return false;
   scenes = [];
   for (const ps of p.scenes) {
     const sc = { id: idSeq++, image: null, imageThumb: null, imageKey: ps.imageKey || null, refImage: null, refThumb: null, refKey: ps.refKey || null, prompt: ps.prompt || "", video: null, videoThumb: null, videoKey: ps.videoKey || null, fromCache: false, genStatus: "idle", genSecs: 0, predId: null, error: "", el: null };
@@ -268,8 +334,10 @@ async function loadProject() {
   return true;
 }
 async function clearProject() {
-  scenes = []; localStorage.removeItem("creator_project"); await idbClear();
+  scenes = []; productPhotos = []; research = ""; researchName = "";
+  localStorage.removeItem("creator_project"); await idbClear();
   renderScenes(); refreshBuild(); updateCacheInfo();
+  renderProdPhotos(); renderResearch(); refreshResearchBtn();
 }
 async function updateCacheInfo() {
   const el = $("cacheInfo"); if (!el) return;
@@ -324,6 +392,174 @@ $("keyTest").onclick = async () => {
   else v = '<span class="bad">' + line + '. Something is blocking Atlas — disable content blockers/VPN, switch networks, or use the proxy in Advanced.</span>';
   out.innerHTML = v;
 };
+
+// ---------- OpenAI key ----------
+function getOAKey() { return (localStorage.getItem("openai_key") || "").trim(); }
+function refreshOAStatus() {
+  const k = getOAKey();
+  $("oaStatus").innerHTML = k ? '<span class="ok">✓ OpenAI key saved — product research enabled</span>' : '<span class="warn">No OpenAI key — product research is off.</span>';
+  $("oaKey").value = k ? "••••••••••••" + k.slice(-4) : "";
+  refreshResearchBtn();
+}
+$("oaSave").onclick = () => { const v = $("oaKey").value.trim(); if (v && !v.startsWith("•")) localStorage.setItem("openai_key", v); refreshOAStatus(); };
+$("oaShow").onclick = () => {
+  const inp = $("oaKey");
+  if (inp.type === "password") { inp.type = "text"; if (getOAKey() && inp.value.startsWith("•")) inp.value = getOAKey(); $("oaShow").textContent = "Hide"; }
+  else { inp.type = "password"; refreshOAStatus(); $("oaShow").textContent = "Show"; }
+};
+$("oaKey").onfocus = () => { if ($("oaKey").value.startsWith("•")) $("oaKey").value = ""; };
+
+// ---------- OpenAI client (Responses API, model ladder with fallback) ----------
+function oaModelLadder() {
+  const l = [...OA_MODELS];
+  const ok = localStorage.getItem("openai_model_ok");
+  if (ok) { const i = l.indexOf(ok); if (i > 0) { l.splice(i, 1); l.unshift(ok); } else if (i < 0) l.unshift(ok); }
+  return l;
+}
+async function oaCall(body) {
+  let lastErr = null;
+  for (const m of oaModelLadder()) {
+    const r = await fetch(OPENAI + "/responses", { method: "POST", headers: { Authorization: "Bearer " + getOAKey(), "Content-Type": "application/json" }, body: JSON.stringify({ ...body, model: m }) });
+    const text = await r.text();
+    if (r.ok) { localStorage.setItem("openai_model_ok", m); console.log("[openai] using model", m); try { return JSON.parse(text); } catch { throw new Error("OpenAI returned non-JSON"); } }
+    const modelMissing = (r.status === 404 || r.status === 400) && /model/i.test(text) && /(not.*(found|exist)|invalid|unknown|does not exist|no access|not available)/i.test(text);
+    if (modelMissing) { console.warn("[openai] model", m, "unavailable → trying next"); lastErr = new Error("Model " + m + " unavailable"); continue; }
+    if (r.status === 401) throw new Error("OpenAI auth failed (401) — re-check your OpenAI key in Step 1.");
+    throw new Error("OpenAI " + r.status + ": " + text.slice(0, 220));
+  }
+  throw lastErr || new Error("No usable OpenAI model found (tried " + OA_MODELS.join(", ") + ")");
+}
+function oaText(resp) {
+  if (typeof resp.output_text === "string" && resp.output_text.trim()) return resp.output_text.trim();
+  const parts = [];
+  (function walk(o) {
+    if (!o) return;
+    if (Array.isArray(o)) { o.forEach(walk); return; }
+    if (typeof o === "object") { if (o.type === "output_text" && typeof o.text === "string") parts.push(o.text); Object.values(o).forEach(walk); }
+  })(resp.output || resp);
+  return parts.join("\n").trim();
+}
+
+// ---------- product photos ----------
+function renderProdPhotos() {
+  const g = $("prodGrid"); g.innerHTML = "";
+  for (const p of productPhotos) {
+    const t = document.createElement("div"); t.className = "ptile";
+    const im = document.createElement("img"); im.src = p.thumb || ""; t.appendChild(im);
+    const cl = document.createElement("button"); cl.className = "clear"; cl.textContent = "✕";
+    cl.onclick = () => { productPhotos = productPhotos.filter((x) => x !== p); renderProdPhotos(); refreshResearchBtn(); saveProject(); };
+    t.appendChild(cl); g.appendChild(t);
+  }
+  const add = document.createElement("div"); add.className = "padd"; add.textContent = "＋"; add.title = "Add product photos";
+  add.onclick = () => $("prodInput").click();
+  ["dragover", "dragenter"].forEach((ev) => add.addEventListener(ev, (e) => { e.preventDefault(); add.style.borderColor = "var(--accent)"; }));
+  ["dragleave", "dragend"].forEach((ev) => add.addEventListener(ev, (e) => { e.preventDefault(); add.style.borderColor = ""; }));
+  add.addEventListener("drop", (e) => { e.preventDefault(); add.style.borderColor = ""; addProductPhotos(e.dataTransfer.files); });
+  g.appendChild(add);
+}
+async function addProductPhotos(list) {
+  const arr = Array.from(list || []).filter((f) => f && (f.type || "").startsWith("image"));
+  for (const f of arr) {
+    const p = { file: f, name: f.name, thumb: await thumbOf(f), key: null };
+    try { p.key = "img:" + (await sha256Hex(f)); await idbPut(p.key, f); } catch {}
+    productPhotos.push(p);
+  }
+  renderProdPhotos(); refreshResearchBtn(); saveProject();
+}
+$("prodInput").onchange = (e) => { addProductPhotos(e.target.files); e.target.value = ""; };
+function refreshResearchBtn() { $("researchBtn").disabled = researching || !productPhotos.length || !getOAKey(); }
+
+// ---------- identify + deep research ----------
+async function identifyProduct() {
+  const content = [{ type: "input_text", text: 'Identify the exact consumer product shown in the photo(s). Reply with ONLY compact JSON: {"name":"...","brand":"...","category":"...","confidence":"high|medium|low"} — no other text.' }];
+  for (const p of productPhotos.slice(0, 4)) content.push({ type: "input_image", image_url: await imageToDataURL(p.file, 768) });
+  const resp = await oaCall({ input: [{ role: "user", content }] });
+  const t = oaText(resp);
+  const m = t.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error("Couldn’t identify the product — model said: " + t.slice(0, 140));
+  let j; try { j = JSON.parse(m[0]); } catch { throw new Error("Couldn’t parse product JSON: " + m[0].slice(0, 140)); }
+  if (!j.name) throw new Error("No product name detected — try clearer photos.");
+  return j;
+}
+async function researchProduct(prod) {
+  const who = prod.name + (prod.brand && !prod.name.toLowerCase().includes(prod.brand.toLowerCase()) ? " by " + prod.brand : "");
+  const prompt = `You are a short-form video (TikTok/Reels) strategist. Use web search to deep-research the product "${who}". Be factual and specific; prefer the official product page, recent reviews and discussions.
+
+Return tight markdown with EXACTLY these sections:
+# ${who}
+## What it is
+## Key benefits (ranked)
+## Outcomes for the target audience
+(the real transformations/results buyers report — lead with these in videos)
+## Target audience
+(who they are, pain points, desires, objections)
+## Proof & talking points
+(specifics, numbers, recurring review themes)
+## Hook ideas (5)
+## CTA lines — Growth video (3)
+(follow/engagement CTAs only — no product push)
+## CTA lines — Product video (3)
+(drive to the product)
+
+No fluff. No inline citations.`;
+  const toolLadder = [[{ type: "web_search" }], [{ type: "web_search_preview" }], null];
+  let lastErr = null;
+  for (const tools of toolLadder) {
+    try {
+      const body = { input: prompt };
+      if (tools) body.tools = tools;
+      const resp = await oaCall(body);
+      const t = oaText(resp);
+      if (t) { console.log("[openai] research done via", tools ? tools[0].type : "model knowledge (no web search available)"); return t; }
+      lastErr = new Error("Empty research response");
+    } catch (e) {
+      if (/web_search|tool/i.test(e.message || "")) { console.warn("[openai]", e.message, "→ trying next tool variant"); lastErr = e; continue; }
+      throw e;
+    }
+  }
+  throw lastErr || new Error("Research failed");
+}
+function renderResearch() {
+  if (!research) { $("researchOut").style.display = "none"; return; }
+  $("researchTitle").textContent = (researchName || "Product") + " — research brief";
+  $("researchText").textContent = research;
+  $("researchOut").style.display = "block";
+}
+$("researchCopy").onclick = () => {
+  copyURL(research, $("researchCopy"));
+};
+$("researchBtn").onclick = async () => {
+  if (researching || !productPhotos.length) return;
+  if (!getOAKey()) { $("researchStatus").className = "scnstatus bad"; $("researchStatus").textContent = "Add your OpenAI key in Step 1 first."; return; }
+  researching = true; refreshResearchBtn();
+  const st = $("researchStatus"); st.className = "scnstatus";
+  const t0 = Date.now();
+  const tick = setInterval(() => { if (st.dataset.phase) st.textContent = st.dataset.phase + " (" + Math.round((Date.now() - t0) / 1000) + "s)"; }, 1000);
+  try {
+    st.dataset.phase = "Identifying product from photos…"; st.textContent = st.dataset.phase;
+    const prod = await identifyProduct();
+    researchName = prod.name + (prod.brand ? " (" + prod.brand + ")" : "");
+    st.dataset.phase = "Deep-researching “" + prod.name + "” — web search, can take a minute…"; st.textContent = st.dataset.phase;
+    research = await researchProduct(prod);
+    renderResearch(); saveProject();
+    st.className = "scnstatus ok"; st.textContent = "✓ Research ready — " + researchName + (prod.confidence === "low" ? " (low confidence ID — re-run with clearer photos if wrong)" : "");
+  } catch (e) {
+    st.className = "scnstatus bad"; st.textContent = "⚠ " + (e.message || e);
+  } finally {
+    clearInterval(tick); delete st.dataset.phase;
+    researching = false; refreshResearchBtn();
+  }
+};
+
+// ---------- video type ----------
+function updateTypeUI() {
+  const t = VID_TYPES[videoType] || VID_TYPES.growth30;
+  $("vidType").value = videoType;
+  $("vidTypeHint").textContent = t.label + " → aim for ≈" + t.scenes + " scenes (8s each ≈ " + fmtDur(t.scenes * 8) + "). End-scene CTA: " +
+    (t.cta === "product" ? "send viewers to the product (link in bio, shop now)." : "ask for a follow + a comment/engagement — no product push.");
+  $("sceneTarget").textContent = "target ≈ " + t.scenes + " scenes · " + t.cta + " CTA";
+}
+$("vidType").onchange = (e) => { videoType = e.target.value; updateTypeUI(); saveProject(); };
 
 // ---------- Atlas Cloud client ----------
 // Tolerant extractors — the API's exact field names vary across its docs, so we
@@ -801,6 +1037,9 @@ function showUpdate(reg) { const t = $("updateToast"); t.style.display = "flex";
 
 // ---------- init ----------
 refreshKeyStatus();
+refreshOAStatus();
+updateTypeUI();
+renderProdPhotos();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 (async () => { const restored = await loadProject(); if (!restored) renderScenes(); refreshBuild(); updateCacheInfo(); })();
 </script>
