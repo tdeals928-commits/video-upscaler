@@ -178,6 +178,13 @@
         <input id="musicInput" type="file" accept="audio/*" hidden />
       </div>
     </div>
+    <label style="margin-top:12px">Dead space (retention)</label>
+    <select id="silenceSel">
+      <option value="on">Cut silent gaps — tighten each clip (recommended)</option>
+      <option value="off">Off — keep clips as generated</option>
+    </select>
+    <div class="hint">Detects silent pauses inside each clip and removes them (jump-cut style) so there's no dead air between lines — the biggest retention lever for talking videos. Skips clips that have no audio.</div>
+
     <label style="margin-top:12px">Clip length fix</label>
     <select id="conformSel">
       <option value="trim">Trim longer clips down to their target length</option>
@@ -222,7 +229,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v33"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v34"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() { return (localStorage.getItem("atlas_base") || ATLAS_DEFAULT).replace(/\/+$/, ""); }
 const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
@@ -254,6 +261,30 @@ function sceneDur(sc) { return sc.genDur || parsePromptDuration(sc.prompt) || 8;
 // Explicit target only (no 8s default) — used by the assembler's length fix.
 function desiredDur(sc) { return sc.genDur || parsePromptDuration(sc.prompt) || null; }
 function conformMode() { const v = localStorage.getItem("conform_mode"); return ["trim", "speed", "off"].includes(v) ? v : "trim"; }
+// ---------- dead-space (silence) removal ----------
+function cutSilence() { return localStorage.getItem("cut_silence") !== "off"; } // default ON
+async function detectSilence(inName) {
+  const logs = []; const h = ({ message }) => logs.push(message);
+  ffmpeg.on("log", h);
+  try { await ffmpeg.exec(["-i", inName, "-vn", "-af", "silencedetect=noise=-30dB:d=0.35", "-f", "null", "-"]); } catch {}
+  ffmpeg.off("log", h);
+  const sil = []; let start = null;
+  for (const line of logs.join("\n").split("\n")) {
+    let m = line.match(/silence_start:\s*(-?[\d.]+)/); if (m) { start = Math.max(0, parseFloat(m[1])); continue; }
+    m = line.match(/silence_end:\s*(-?[\d.]+)/); if (m && start != null) { sil.push([start, parseFloat(m[1])]); start = null; }
+  }
+  return sil; // [start,end] silent regions
+}
+// Convert silent regions → the segments to KEEP (with a little padding around speech).
+function silenceToKeeps(sil, totalDur, pad) {
+  const cuts = [];
+  for (const [s, e] of sil) { const cs = s + pad, ce = e - pad; if (ce - cs > 0.05) cuts.push([Math.max(0, cs), Math.min(totalDur, ce)]); }
+  cuts.sort((a, b) => a[0] - b[0]);
+  const keeps = []; let pos = 0;
+  for (const [cs, ce] of cuts) { if (cs > pos + 0.02) keeps.push([pos, cs]); pos = Math.max(pos, ce); }
+  if (pos < totalDur - 0.02) keeps.push([pos, totalDur]);
+  return keeps.filter(([a, b]) => b - a > 0.08);
+}
 // Measure a clip's real length and flag mismatches in the scene status.
 async function measureScene(sc) {
   try { sc.realDur = sc.video ? await durationOf(sc.video) : 0; } catch { sc.realDur = 0; }
@@ -984,33 +1015,55 @@ async function build() {
       const inName = "in_" + clips[i].id + ".mp4", seg = "seg_" + i + ".ts";
       await ffmpeg.writeFile(inName, await fetchFile(clips[i].video));
       const hasA = await probeHasAudio(inName);
+      const padVf = `scale=${CANVAS_W}:${CANVAS_H}:force_original_aspect_ratio=decrease,pad=${CANVAS_W}:${CANVAS_H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p`;
+      // veryfast: at a fixed CRF the preset only trades encode-time vs file size, NOT
+      // visual quality — so we keep CRF 18 (visually lossless) but encode much faster.
+      const tailEnc = ["-c:v", "libx264", "-crf", String(CRF), "-preset", "veryfast", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-f", "mpegts", seg];
 
-      // ---- Clip length fix: conform to the scene's target length if it differs ----
-      const want = desiredDur(clips[i]);
-      let actual = clips[i].realDur;
-      if (want && !actual) { try { actual = await durationOf(clips[i].video); } catch {} }
-      const mode = conformMode();
-      let vSpeed = "", aSpeed = "", trimArgs = [];
-      if (want && actual && Math.abs(actual - want) > 0.3 && mode !== "off") {
-        if (mode === "trim") {
-          if (actual > want) { trimArgs = ["-t", String(want)]; console.log("[assemble] clip " + (i + 1) + ": trimming " + actual.toFixed(1) + "s → " + want + "s"); }
-          else console.log("[assemble] clip " + (i + 1) + ": shorter than target (" + actual.toFixed(1) + "s < " + want + "s) — can’t extend, leaving as-is");
-        } else { // speed
-          const f = Math.max(0.5, Math.min(2, want / actual));   // setpts factor (video)
-          const tempo = Math.max(0.5, Math.min(2, actual / want)); // atempo (audio, pitch-preserving)
-          vSpeed = ",setpts=" + f.toFixed(5) + "*PTS";
-          aSpeed = ",atempo=" + tempo.toFixed(5);
-          console.log("[assemble] clip " + (i + 1) + ": speed-adjusting " + actual.toFixed(1) + "s → " + want + "s (×" + tempo.toFixed(2) + ")");
+      // ---- Dead-space removal: cut silent gaps inside the clip (audio clips only) ----
+      let keeps = null;
+      if (cutSilence() && hasA) {
+        let dur = clips[i].realDur; if (!dur) { try { dur = await durationOf(clips[i].video); } catch {} }
+        if (dur > 0.5) {
+          const k = silenceToKeeps(await detectSilence(inName), dur, 0.10);
+          const kept = k.reduce((a, [s, e]) => a + (e - s), 0);
+          if (k.length && kept > 0.4 && kept < dur - 0.2) {
+            keeps = k;
+            setProgress(Math.round((i / total) * 100), "Trimming dead space in clip " + (i + 1) + "…");
+            console.log("[assemble] clip " + (i + 1) + ": cut " + (dur - kept).toFixed(1) + "s of dead space (" + dur.toFixed(1) + "s → " + kept.toFixed(1) + "s)");
+          }
         }
       }
 
-      const vf = `[0:v]scale=${CANVAS_W}:${CANVAS_H}:force_original_aspect_ratio=decrease,pad=${CANVAS_W}:${CANVAS_H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p${vSpeed}[v]`;
-      // veryfast: at a fixed CRF the preset only trades encode-time vs file size, NOT
-      // visual quality — so we keep CRF 18 (visually lossless) but encode much faster.
-      const tail = [...trimArgs, "-c:v", "libx264", "-crf", String(CRF), "-preset", "veryfast", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-f", "mpegts", seg];
-      const args = hasA
-        ? ["-i", inName, "-filter_complex", vf + ";[0:a]aresample=48000,aformat=channel_layouts=stereo" + aSpeed + "[a]", "-map", "[v]", "-map", "[a]", ...tail]
-        : ["-i", inName, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", vf, "-map", "[v]", "-map", "1:a", "-shortest", ...tail];
+      let args;
+      if (keeps) {
+        // keep only the spoken segments, video+audio together, then normalize
+        const parts = keeps.map(([s, e], k) => `[0:v]trim=${s.toFixed(3)}:${e.toFixed(3)},setpts=PTS-STARTPTS[v${k}];[0:a]atrim=${s.toFixed(3)}:${e.toFixed(3)},asetpts=PTS-STARTPTS[a${k}]`).join(";");
+        const ins = keeps.map((_, k) => `[v${k}][a${k}]`).join("");
+        const fc = parts + ";" + ins + `concat=n=${keeps.length}:v=1:a=1[cv][ca];[cv]${padVf}[v];[ca]aresample=48000,aformat=channel_layouts=stereo[a]`;
+        args = ["-i", inName, "-filter_complex", fc, "-map", "[v]", "-map", "[a]", ...tailEnc];
+      } else {
+        // ---- Clip length fix (conform) — only when we're not cutting silence ----
+        const want = desiredDur(clips[i]);
+        let actual = clips[i].realDur;
+        if (want && !actual) { try { actual = await durationOf(clips[i].video); } catch {} }
+        const mode = conformMode();
+        let vSpeed = "", aSpeed = "", trimArgs = [];
+        if (want && actual && Math.abs(actual - want) > 0.3 && mode !== "off") {
+          if (mode === "trim") {
+            if (actual > want) { trimArgs = ["-t", String(want)]; console.log("[assemble] clip " + (i + 1) + ": trimming " + actual.toFixed(1) + "s → " + want + "s"); }
+          } else { // speed
+            const f = Math.max(0.5, Math.min(2, want / actual)), tempo = Math.max(0.5, Math.min(2, actual / want));
+            vSpeed = ",setpts=" + f.toFixed(5) + "*PTS"; aSpeed = ",atempo=" + tempo.toFixed(5);
+            console.log("[assemble] clip " + (i + 1) + ": speed-adjusting " + actual.toFixed(1) + "s → " + want + "s (×" + tempo.toFixed(2) + ")");
+          }
+        }
+        const vf = `[0:v]${padVf}${vSpeed}[v]`;
+        const tail = [...trimArgs, ...tailEnc];
+        args = hasA
+          ? ["-i", inName, "-filter_complex", vf + ";[0:a]aresample=48000,aformat=channel_layouts=stereo" + aSpeed + "[a]", "-map", "[v]", "-map", "[a]", ...tail]
+          : ["-i", inName, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", vf, "-map", "[v]", "-map", "1:a", "-shortest", ...tail];
+      }
       await ffmpeg.exec(args);
       segs.push(seg);
       try { await ffmpeg.deleteFile(inName); } catch {}
@@ -1121,6 +1174,8 @@ function showUpdate(reg) { const t = $("updateToast"); t.style.display = "flex";
 $("buildTag").textContent = "build " + APP_BUILD;
 $("conformSel").value = conformMode();
 $("conformSel").onchange = (e) => { localStorage.setItem("conform_mode", e.target.value); scenes.forEach(renderScene); };
+$("silenceSel").value = cutSilence() ? "on" : "off";
+$("silenceSel").onchange = (e) => localStorage.setItem("cut_silence", e.target.value);
 refreshKeyStatus();
 refreshOAStatus();
 updateTypeUI();
