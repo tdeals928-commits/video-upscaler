@@ -90,6 +90,9 @@
   .research { margin-top: 12px; background: #0d1117; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
   .rhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
   .research pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text); max-height: 360px; overflow-y: auto; }
+  .durrow { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .durrow .dlbl { font-size: 12px; color: var(--muted); flex-shrink: 0; }
+  .durrow select { width: auto; flex: 1; padding: 7px 10px; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -156,7 +159,7 @@
 
   <!-- STEP 3: SCENES -->
   <div class="card">
-    <div class="step">3 · Scenes <span class="pill">9:16 · 8s · 480p · audio on</span> <span class="pill" id="sceneTarget"></span></div>
+    <div class="step">3 · Scenes <span class="pill">9:16 · 4–12s · 480p · audio on</span> <span class="pill" id="sceneTarget"></span></div>
     <div id="scenes"></div>
     <button class="ghost" id="addScene" type="button">＋ Add scene</button>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px">
@@ -231,6 +234,21 @@ const VID_TYPES = {
   product155: { label: "Product ~2:35",         secs: 155, scenes: 19,   cta: "product" },
   productFree:{ label: "Product (no limit)",    secs: null, scenes: null, cta: "product" },
 };
+// ---------- per-scene clip duration (Seedance supports 4–12s) ----------
+function parsePromptDuration(text) {
+  const m = (text || "").match(/(\d{1,2})\s*[-–]?\s*(?:s\b|secs?\b|seconds?\b)/i);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (!n) return null;
+  return Math.min(12, Math.max(4, n)); // clamp to the API's supported range
+}
+function sceneDur(sc) { return sc.genDur || parsePromptDuration(sc.prompt) || 8; }
+function updateDurLabel(sc) {
+  if (!sc.el || !sc.el.durAuto) return;
+  const p = parsePromptDuration(sc.prompt);
+  sc.el.durAuto.textContent = "Auto — " + (p ? p + "s (from prompt)" : "8s (default)");
+}
+
 // ---------- OpenAI (product research) ----------
 const OPENAI = "https://api.openai.com/v1";
 const OA_MODELS = ["gpt-5.5", "gpt-5.2", "gpt-5.1", "gpt-4o"]; // first id the account accepts wins; remembered
@@ -297,7 +315,7 @@ async function sha256Hex(...parts) {
   return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 // A clip's cache key = hash of everything that determines its output.
-async function sceneCacheKey(sc) { return "vid:" + (await sha256Hex(sc.image, " ", sc.prompt || "", " ", sc.refImage, " ", MODEL + "|9:16|8|480p|audio")); }
+async function sceneCacheKey(sc) { return "vid:" + (await sha256Hex(sc.image, " ", sc.prompt || "", " ", sc.refImage, " ", MODEL + "|9:16|" + sceneDur(sc) + "|480p|audio")); }
 
 let _saveT;
 function saveProject() {
@@ -306,7 +324,7 @@ function saveProject() {
     try {
       const p = { videoType, research, researchName,
                   productPhotos: productPhotos.map((x) => ({ key: x.key, name: x.name })),
-                  scenes: scenes.map((s) => ({ prompt: s.prompt || "", imageKey: s.imageKey || null, imageName: s.image ? s.image.name : null, refKey: s.refKey || null, refName: s.refImage ? s.refImage.name : null, videoKey: s.videoKey || null })) };
+                  scenes: scenes.map((s) => ({ prompt: s.prompt || "", genDur: s.genDur || 0, imageKey: s.imageKey || null, imageName: s.image ? s.image.name : null, refKey: s.refKey || null, refName: s.refImage ? s.refImage.name : null, videoKey: s.videoKey || null })) };
       localStorage.setItem("creator_project", JSON.stringify(p));
     } catch {}
     updateCacheInfo();
@@ -328,7 +346,7 @@ async function loadProject() {
   if (!Array.isArray(p.scenes) || !p.scenes.length) return false;
   scenes = [];
   for (const ps of p.scenes) {
-    const sc = { id: idSeq++, image: null, imageThumb: null, imageKey: ps.imageKey || null, refImage: null, refThumb: null, refKey: ps.refKey || null, prompt: ps.prompt || "", video: null, videoThumb: null, videoKey: ps.videoKey || null, fromCache: false, genStatus: "idle", genSecs: 0, predId: null, error: "", el: null };
+    const sc = { id: idSeq++, image: null, imageThumb: null, imageKey: ps.imageKey || null, refImage: null, refThumb: null, refKey: ps.refKey || null, prompt: ps.prompt || "", genDur: ps.genDur || 0, video: null, videoThumb: null, videoKey: ps.videoKey || null, fromCache: false, genStatus: "idle", genSecs: 0, predId: null, error: "", el: null };
     scenes.push(sc);
     if (ps.imageKey) { const b = await idbGet(ps.imageKey); if (b) { sc.image = new File([b], ps.imageName || "image.jpg", { type: b.type || "image/jpeg" }); sc.imageThumb = await thumbOf(sc.image); } }
     if (ps.refKey) { const b = await idbGet(ps.refKey); if (b) { sc.refImage = new File([b], ps.refName || "ref.jpg", { type: b.type || "image/jpeg" }); sc.refThumb = await thumbOf(sc.refImage); } }
@@ -607,7 +625,9 @@ async function atlasUpload(file) {
 async function atlasGenerate(scene, onSize) {
   const bare = (s) => (typeof s === "string" && s.startsWith("data:")) ? s.replace(/^data:[^,]*,/, "") : s;
   const send = async (img, lastImg) => {
-    const body = { model: MODEL, prompt: scene.prompt || "", image: img, aspect_ratio: "9:16", duration: 8, resolution: "480p", generate_audio: true, camera_fixed: false, seed: -1 };
+    const dur = sceneDur(scene);
+    console.log("[atlas] clip duration:", dur + "s", scene.genDur ? "(manual)" : "(auto from prompt/default)");
+    const body = { model: MODEL, prompt: scene.prompt || "", image: img, aspect_ratio: "9:16", duration: dur, resolution: "480p", generate_audio: true, camera_fixed: false, seed: -1 };
     if (lastImg) body.last_image = lastImg;
     const r = await fetch(atlasBase() + "/model/generateVideo", { method: "POST", headers: { Authorization: "Bearer " + getKey(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return { r, text: await r.text() };
@@ -760,7 +780,7 @@ async function generateScene(scene, force) {
 }
 
 // ---------- scenes UI ----------
-function newScene() { return { id: idSeq++, image: null, imageThumb: null, imageKey: null, refImage: null, refThumb: null, refKey: null, prompt: "", video: null, videoThumb: null, videoKey: null, fromCache: false, genStatus: "idle", genSecs: 0, predId: null, error: "", el: null }; }
+function newScene() { return { id: idSeq++, image: null, imageThumb: null, imageKey: null, refImage: null, refThumb: null, refKey: null, prompt: "", genDur: 0, video: null, videoThumb: null, videoKey: null, fromCache: false, genStatus: "idle", genSecs: 0, predId: null, error: "", el: null }; }
 function addScene() { scenes.push(newScene()); renderScenes(); refreshBuild(); saveProject(); }
 function removeScene(sc) { scenes = scenes.filter((s) => s !== sc); renderScenes(); refreshBuild(); saveProject(); }
 function moveScene(sc, dir) { const i = scenes.indexOf(sc), j = i + dir; if (j < 0 || j >= scenes.length) return; scenes[i] = scenes[j]; scenes[j] = sc; renderScenes(); refreshBuild(); saveProject(); }
@@ -814,7 +834,16 @@ function renderScenes() {
     drops.append(makeDrop(sc, "image", "imageThumb", "＋ First-frame photo", "image/*"),
                  makeDrop(sc, "refImage", "refThumb", "＋ Reference (optional)", "image/*"));
 
-    const ta = document.createElement("textarea"); ta.placeholder = "Describe the video for this scene…"; ta.value = sc.prompt || ""; ta.oninput = () => sc.prompt = ta.value; ta.onblur = saveProject;
+    const ta = document.createElement("textarea"); ta.placeholder = "Describe the video for this scene…"; ta.value = sc.prompt || ""; ta.oninput = () => { sc.prompt = ta.value; updateDurLabel(sc); }; ta.onblur = saveProject;
+
+    const durRow = document.createElement("div"); durRow.className = "durrow";
+    const dlbl = document.createElement("span"); dlbl.className = "dlbl"; dlbl.textContent = "Clip length";
+    const dsel = document.createElement("select");
+    const durAuto = document.createElement("option"); durAuto.value = "0"; dsel.appendChild(durAuto);
+    for (let s = 4; s <= 12; s++) { const o = document.createElement("option"); o.value = String(s); o.textContent = s + "s"; dsel.appendChild(o); }
+    dsel.value = String(sc.genDur || 0);
+    dsel.onchange = () => { sc.genDur = parseInt(dsel.value, 10) || 0; saveProject(); };
+    durRow.append(dlbl, dsel);
 
     const actions = document.createElement("div"); actions.className = "scnactions";
     const gen = document.createElement("button"); gen.textContent = "✨ Generate video"; gen.onclick = () => generateScene(sc, sc.genStatus === "done"); // re-generate forces a fresh (paid) run
@@ -829,7 +858,7 @@ function renderScenes() {
 
     const body = document.createElement("div"); body.className = "scenebody";
     const mainCol = document.createElement("div"); mainCol.className = "scnmain";
-    mainCol.append(drops, ta, actions, bar, stat);
+    mainCol.append(drops, ta, durRow, actions, bar, stat);
     const preview = document.createElement("div"); preview.className = "scnpreview pvbox";
     const ph = document.createElement("div"); ph.className = "scnph"; ph.textContent = "Preview";
     const vid = document.createElement("video"); vid.className = "scnvid"; vid.muted = true; vid.playsInline = true; // thumbnail; tap to open
@@ -840,7 +869,8 @@ function renderScenes() {
 
     card.append(head, body);
     c.appendChild(card);
-    sc.el = { gen, stat, bar, vid, ph, expand };
+    sc.el = { gen, stat, bar, vid, ph, expand, durAuto };
+    updateDurLabel(sc);
     renderScene(sc);
   });
 }
