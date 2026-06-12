@@ -229,7 +229,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v35"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v36"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() { return (localStorage.getItem("atlas_base") || ATLAS_DEFAULT).replace(/\/+$/, ""); }
 const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
@@ -375,7 +375,7 @@ async function sha256Hex(...parts) {
   return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 // A clip's cache key = hash of everything that determines its output.
-async function sceneCacheKey(sc) { return "vid:" + (await sha256Hex(sc.image, " ", sc.prompt || "", " ", sc.refImage, " ", MODEL + "|9:16|" + sceneDur(sc) + "|480p|audio")); }
+async function sceneCacheKey(sc) { return "vid:" + (await sha256Hex(sc.image, " ", sc.prompt || "", " ", MODEL + "|9:16|" + sceneDur(sc) + "|480p|audio")); }
 
 let _saveT;
 function saveProject() {
@@ -751,11 +751,11 @@ async function atlasUpload(file) {
 // submitted with inline images were observed to sit in "processing" indefinitely.
 async function atlasGenerate(scene, onSize) {
   const bare = (s) => (typeof s === "string" && s.startsWith("data:")) ? s.replace(/^data:[^,]*,/, "") : s;
-  const send = async (img, lastImg) => {
+  const send = async (img) => {
     const dur = sceneDur(scene);
     console.log("[atlas] clip duration:", dur + "s", scene.genDur ? "(manual)" : "(auto from prompt/default)");
+    // Video uses ONLY the first-frame image — the Reference image is for image generation only.
     const body = { model: MODEL, prompt: scene.prompt || "", image: img, aspect_ratio: "9:16", duration: dur, resolution: "480p", generate_audio: true, camera_fixed: false, seed: -1 };
-    if (lastImg) body.last_image = lastImg;
     const r = await fetch(atlasBase() + "/model/generateVideo", { method: "POST", headers: { Authorization: "Bearer " + getKey(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return { r, text: await r.text() };
   };
@@ -776,10 +776,8 @@ async function atlasGenerate(scene, onSize) {
   try {
     const hosted = await atlasUpload(scene.image);
     if (hosted && !hosted.startsWith("data:")) {
-      let hostedLast = null;
-      if (scene.refImage) { try { const h = await atlasUpload(scene.refImage); if (h && !h.startsWith("data:")) hostedLast = h; } catch {} }
       console.log("[atlas] image sent as hosted URL:", hosted.slice(0, 100));
-      const { r, text } = await send(hosted, hostedLast);
+      const { r, text } = await send(hosted);
       return parseSubmit(r, text);
     }
     console.warn("[atlas] uploadMedia network-blocked → inline base64 fallback");
@@ -792,15 +790,14 @@ async function atlasGenerate(scene, onSize) {
   let netErr = null;
   for (let i = 0; i < sizes.length; i++) {
     if (onSize) onSize(sizes[i], i);
-    let img, last;
+    let img;
     try {
       img = await imageToDataURL(scene.image, sizes[i]);
-      last = scene.refImage ? await imageToDataURL(scene.refImage, sizes[i]) : null;
     } catch (e) { throw new Error("Couldn’t read the image: " + (e.message || e)); }
     try {
       console.log("[atlas] image sent as inline base64 (" + sizes[i] + "px, " + Math.round(img.length / 1024) + " KB)");
-      let { r, text } = await send(img, last);
-      if (!r.ok && r.status === 400 && img.startsWith("data:")) ({ r, text } = await send(bare(img), bare(last))); // some APIs want bare base64
+      let { r, text } = await send(img);
+      if (!r.ok && r.status === 400 && img.startsWith("data:")) ({ r, text } = await send(bare(img))); // some APIs want bare base64
       return parseSubmit(r, text);
     } catch (e) {
       if (e instanceof TypeError) { netErr = e; continue; } // network dropped this body size — shrink and retry
