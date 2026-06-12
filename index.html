@@ -178,6 +178,13 @@
         <input id="musicInput" type="file" accept="audio/*" hidden />
       </div>
     </div>
+    <label style="margin-top:12px">Clip length fix</label>
+    <select id="conformSel">
+      <option value="trim">Trim longer clips down to their target length</option>
+      <option value="speed">Speed-adjust clips to their target length</option>
+      <option value="off">Off — keep clips exactly as generated</option>
+    </select>
+    <div class="hint">Applies only when a scene has a target length (from its prompt or the Clip length picker) and the actual clip differs. Note: trimming or speeding clips with <b>spoken dialogue</b> cuts words off / changes pacing — for talking scenes, prefer writing the script to fit the clip length.</div>
     <div class="hint">Final output: <b>1080×1920 (9:16) · CRF 18 (visually lossless) · faststart MP4</b>. Scenes are processed one at a time on your device.</div>
     <button class="good" id="build" type="button" disabled>Assemble &amp; upscale to 1080p</button>
     <div class="progress-wrap" id="progWrap">
@@ -199,7 +206,7 @@
     <div class="hint">Zip includes the final video, every scene clip, and your source images.</div>
   </div>
 
-  <p class="foot">Runs in your browser with ffmpeg (WebAssembly). Add to Home Screen for an app-like experience.</p>
+  <p class="foot">Runs in your browser with ffmpeg (WebAssembly). Add to Home Screen for an app-like experience. · <b id="buildTag"></b></p>
 </div>
 
 <div class="toast" id="updateToast" style="display:none">
@@ -215,6 +222,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
+const APP_BUILD = "v33"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() { return (localStorage.getItem("atlas_base") || ATLAS_DEFAULT).replace(/\/+$/, ""); }
 const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
@@ -243,6 +251,16 @@ function parsePromptDuration(text) {
   return Math.min(12, Math.max(4, n)); // clamp to the API's supported range
 }
 function sceneDur(sc) { return sc.genDur || parsePromptDuration(sc.prompt) || 8; }
+// Explicit target only (no 8s default) — used by the assembler's length fix.
+function desiredDur(sc) { return sc.genDur || parsePromptDuration(sc.prompt) || null; }
+function conformMode() { const v = localStorage.getItem("conform_mode"); return ["trim", "speed", "off"].includes(v) ? v : "trim"; }
+// Measure a clip's real length and flag mismatches in the scene status.
+async function measureScene(sc) {
+  try { sc.realDur = sc.video ? await durationOf(sc.video) : 0; } catch { sc.realDur = 0; }
+  const want = desiredDur(sc);
+  if (want && sc.realDur && Math.abs(sc.realDur - want) > 0.3)
+    console.warn("[clip] scene " + sc.id + ": Atlas returned " + sc.realDur.toFixed(1) + "s but target is " + want + "s — the assembler’s Clip length fix will conform it (mode: " + conformMode() + ")");
+}
 function updateDurLabel(sc) {
   if (!sc.el || !sc.el.durAuto) return;
   const p = parsePromptDuration(sc.prompt);
@@ -350,7 +368,7 @@ async function loadProject() {
     scenes.push(sc);
     if (ps.imageKey) { const b = await idbGet(ps.imageKey); if (b) { sc.image = new File([b], ps.imageName || "image.jpg", { type: b.type || "image/jpeg" }); sc.imageThumb = await thumbOf(sc.image); } }
     if (ps.refKey) { const b = await idbGet(ps.refKey); if (b) { sc.refImage = new File([b], ps.refName || "ref.jpg", { type: b.type || "image/jpeg" }); sc.refThumb = await thumbOf(sc.refImage); } }
-    if (ps.videoKey) { const b = await idbGet(ps.videoKey); if (b) { sc.video = new File([b], "scene.mp4", { type: "video/mp4" }); sc.videoThumb = await thumbOf(sc.video); sc.fromCache = true; sc.genStatus = "done"; } }
+    if (ps.videoKey) { const b = await idbGet(ps.videoKey); if (b) { sc.video = new File([b], "scene.mp4", { type: "video/mp4" }); sc.videoThumb = await thumbOf(sc.video); sc.fromCache = true; sc.genStatus = "done"; await measureScene(sc); } }
   }
   renderScenes(); refreshBuild(); updateCacheInfo();
   return true;
@@ -756,6 +774,7 @@ async function generateScene(scene, force) {
     if (cached) {
       scene.video = new File([cached], "scene" + scene.id + ".mp4", { type: "video/mp4" });
       scene.videoKey = key; scene.fromCache = true; scene.videoThumb = await thumbOf(scene.video);
+      await measureScene(scene);
       scene.genStatus = "done"; renderScene(scene); refreshBuild(); saveProject(); return;
     }
   }
@@ -770,6 +789,7 @@ async function generateScene(scene, force) {
     scene.fromCache = false;
     if (key) { await idbPut(key, scene.video); scene.videoKey = key; } // cache it so we never pay for this again
     scene.videoThumb = await thumbOf(scene.video);
+    await measureScene(scene);
     scene.genStatus = "done"; renderScene(scene); saveProject();
   } catch (e) {
     let m = (e && e.message) ? e.message : String(e);
@@ -850,7 +870,7 @@ function renderScenes() {
     const dropVidWrap = document.createElement("button"); dropVidWrap.className = "ghost"; dropVidWrap.textContent = "Use ready video";
     const vidInput = document.createElement("input"); vidInput.type = "file"; vidInput.accept = "video/*"; vidInput.hidden = true;
     dropVidWrap.onclick = () => vidInput.click();
-    vidInput.onchange = async (e) => { const f = e.target.files[0]; e.target.value = ""; if (!f) return; sc.video = f; sc.videoThumb = await thumbOf(f); sc.genStatus = "done"; sc.error = ""; sc.fromCache = false; try { const k = "vid:" + (await sha256Hex(f)); await idbPut(k, f); sc.videoKey = k; } catch {} renderScene(sc); refreshBuild(); saveProject(); };
+    vidInput.onchange = async (e) => { const f = e.target.files[0]; e.target.value = ""; if (!f) return; sc.video = f; sc.videoThumb = await thumbOf(f); sc.genStatus = "done"; sc.error = ""; sc.fromCache = false; try { const k = "vid:" + (await sha256Hex(f)); await idbPut(k, f); sc.videoKey = k; } catch {} await measureScene(sc); renderScene(sc); refreshBuild(); saveProject(); };
     actions.append(gen, dropVidWrap, vidInput);
 
     const bar = document.createElement("div"); bar.className = "scnbar"; bar.appendChild(document.createElement("div"));
@@ -882,8 +902,13 @@ function renderScene(sc) {
   e.gen.disabled = building || busy || !getKey() || !sc.image;
   e.bar.style.display = busy ? "block" : "none";
   if (sc.genStatus === "done" && sc.video) {
-    e.stat.className = "scnstatus ok";
-    e.stat.textContent = "✓ Clip ready" + (sc.fromCache ? " · cached (no charge)" : "") + " · " + fmtSize(sc.video.size);
+    const want = desiredDur(sc);
+    const mismatch = want && sc.realDur && Math.abs(sc.realDur - want) > 0.3;
+    e.stat.className = "scnstatus " + (mismatch ? "warn" : "ok");
+    e.stat.textContent = "✓ Clip ready" + (sc.fromCache ? " · cached (no charge)" : "") +
+      (sc.realDur ? " · " + sc.realDur.toFixed(1) + "s" : "") +
+      (mismatch ? " (target " + want + "s — will be " + (conformMode() === "off" ? "left as-is" : conformMode() === "trim" ? "trimmed" : "speed-adjusted") + ")" : "") +
+      " · " + fmtSize(sc.video.size);
     if (!e.vid.src) e.vid.src = URL.createObjectURL(sc.video);
     e.vid.style.display = "block"; e.ph.style.display = "none"; e.expand.style.display = "flex"; e.gen.textContent = "✨ Re-generate";
   } else if (sc.genStatus === "error") {
@@ -959,12 +984,32 @@ async function build() {
       const inName = "in_" + clips[i].id + ".mp4", seg = "seg_" + i + ".ts";
       await ffmpeg.writeFile(inName, await fetchFile(clips[i].video));
       const hasA = await probeHasAudio(inName);
-      const vf = `[0:v]scale=${CANVAS_W}:${CANVAS_H}:force_original_aspect_ratio=decrease,pad=${CANVAS_W}:${CANVAS_H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v]`;
+
+      // ---- Clip length fix: conform to the scene's target length if it differs ----
+      const want = desiredDur(clips[i]);
+      let actual = clips[i].realDur;
+      if (want && !actual) { try { actual = await durationOf(clips[i].video); } catch {} }
+      const mode = conformMode();
+      let vSpeed = "", aSpeed = "", trimArgs = [];
+      if (want && actual && Math.abs(actual - want) > 0.3 && mode !== "off") {
+        if (mode === "trim") {
+          if (actual > want) { trimArgs = ["-t", String(want)]; console.log("[assemble] clip " + (i + 1) + ": trimming " + actual.toFixed(1) + "s → " + want + "s"); }
+          else console.log("[assemble] clip " + (i + 1) + ": shorter than target (" + actual.toFixed(1) + "s < " + want + "s) — can’t extend, leaving as-is");
+        } else { // speed
+          const f = Math.max(0.5, Math.min(2, want / actual));   // setpts factor (video)
+          const tempo = Math.max(0.5, Math.min(2, actual / want)); // atempo (audio, pitch-preserving)
+          vSpeed = ",setpts=" + f.toFixed(5) + "*PTS";
+          aSpeed = ",atempo=" + tempo.toFixed(5);
+          console.log("[assemble] clip " + (i + 1) + ": speed-adjusting " + actual.toFixed(1) + "s → " + want + "s (×" + tempo.toFixed(2) + ")");
+        }
+      }
+
+      const vf = `[0:v]scale=${CANVAS_W}:${CANVAS_H}:force_original_aspect_ratio=decrease,pad=${CANVAS_W}:${CANVAS_H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p${vSpeed}[v]`;
       // veryfast: at a fixed CRF the preset only trades encode-time vs file size, NOT
       // visual quality — so we keep CRF 18 (visually lossless) but encode much faster.
-      const tail = ["-c:v", "libx264", "-crf", String(CRF), "-preset", "veryfast", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-f", "mpegts", seg];
+      const tail = [...trimArgs, "-c:v", "libx264", "-crf", String(CRF), "-preset", "veryfast", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-f", "mpegts", seg];
       const args = hasA
-        ? ["-i", inName, "-filter_complex", vf + ";[0:a]aresample=48000,aformat=channel_layouts=stereo[a]", "-map", "[v]", "-map", "[a]", ...tail]
+        ? ["-i", inName, "-filter_complex", vf + ";[0:a]aresample=48000,aformat=channel_layouts=stereo" + aSpeed + "[a]", "-map", "[v]", "-map", "[a]", ...tail]
         : ["-i", inName, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", vf, "-map", "[v]", "-map", "1:a", "-shortest", ...tail];
       await ffmpeg.exec(args);
       segs.push(seg);
@@ -1073,6 +1118,9 @@ if ("serviceWorker" in navigator) {
 function showUpdate(reg) { const t = $("updateToast"); t.style.display = "flex"; $("updateBtn").onclick = () => { t.style.display = "none"; if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" }); else location.reload(); }; }
 
 // ---------- init ----------
+$("buildTag").textContent = "build " + APP_BUILD;
+$("conformSel").value = conformMode();
+$("conformSel").onchange = (e) => { localStorage.setItem("conform_mode", e.target.value); scenes.forEach(renderScene); };
 refreshKeyStatus();
 refreshOAStatus();
 updateTypeUI();
