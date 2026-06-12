@@ -30,7 +30,8 @@ function corsHeaders(req) {
   };
 }
 
-async function relay(req, res) {
+// Forward a request to an upstream API server-side. `targetUrl` is the full URL.
+async function relay(req, res, targetUrl) {
   const cors = corsHeaders(req);
   if (req.method === "OPTIONS") { res.writeHead(204, cors); return res.end(); }
 
@@ -44,7 +45,7 @@ async function relay(req, res) {
   if (req.headers["content-type"]) headers["Content-Type"] = req.headers["content-type"];
 
   try {
-    const upstream = await fetch(ATLAS + req.url, {
+    const upstream = await fetch(targetUrl, {
       method: req.method,
       headers,
       body: (req.method === "GET" || req.method === "HEAD") ? undefined : body,
@@ -82,8 +83,11 @@ async function fetchRelay(req, res) {
   }
 }
 
+const OPENAI = "https://api.openai.com";
+
 http.createServer((req, res) => {
-  if (req.url.startsWith("/api/v1/")) return relay(req, res);
+  if (req.url.startsWith("/api/v1/")) return relay(req, res, ATLAS + req.url);
+  if (req.url.startsWith("/openai/v1/")) return relay(req, res, OPENAI + req.url.replace(/^\/openai/, ""));
   if (req.url.startsWith("/fetch?")) return fetchRelay(req, res);
 
   let rel = decodeURIComponent(req.url.split("?")[0]);
@@ -95,4 +99,4 @@ http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream" });
     res.end(data);
   });
-}).listen(PORT, () => console.log(`\n  App + Atlas relay →  http://localhost:${PORT}\n  Relay endpoint    →  http://localhost:${PORT}/api/v1\n`));
+}).listen(PORT, () => console.log(`\n  App + relays      →  http://localhost:${PORT}\n  Atlas relay       →  http://localhost:${PORT}/api/v1\n  OpenAI relay      →  http://localhost:${PORT}/openai/v1\n`));

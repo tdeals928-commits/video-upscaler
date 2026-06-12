@@ -229,7 +229,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v34"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v35"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() { return (localStorage.getItem("atlas_base") || ATLAS_DEFAULT).replace(/\/+$/, ""); }
 const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
@@ -298,9 +298,20 @@ function updateDurLabel(sc) {
   sc.el.durAuto.textContent = "Auto — " + (p ? p + "s (from prompt)" : "8s (default)");
 }
 
-// ---------- OpenAI (product research) ----------
-const OPENAI = "https://api.openai.com/v1";
+// ---------- OpenAI (product research + scene image generation) ----------
+const OPENAI_DEFAULT = "https://api.openai.com/v1";
+// Prefer a relay (serve.js / Worker) for OpenAI — it has no browser CORS and the
+// network's upload block doesn't apply to a server-side call.
+function openaiBase() {
+  const o = localStorage.getItem("openai_base"); if (o) return o.replace(/\/+$/, "");
+  const ab = localStorage.getItem("atlas_base"); // reuse the Atlas relay's host
+  if (ab) { try { return new URL(ab).origin + "/openai/v1"; } catch {} }
+  // served by the local relay (serve.js serves /openai/v1 same-origin)?
+  if (/^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/i.test(location.origin)) return location.origin + "/openai/v1";
+  return OPENAI_DEFAULT;
+}
 const OA_MODELS = ["gpt-5.5", "gpt-5.2", "gpt-5.1", "gpt-4o"]; // first id the account accepts wins; remembered
+const OA_IMAGE_MODELS = ["gpt-image-2", "gpt-image-1"]; // gpt-image-2 first (per request), fall back to gpt-image-1
 
 // ---------- helpers ----------
 function fmtSize(b) { if (b == null) return ""; const u = ["B","KB","MB","GB"]; let i = 0; while (b >= 1024 && i < u.length-1) { b /= 1024; i++; } return b.toFixed(b < 10 && i > 0 ? 1 : 0) + " " + u[i]; }
@@ -373,7 +384,7 @@ function saveProject() {
     try {
       const p = { videoType, research, researchName,
                   productPhotos: productPhotos.map((x) => ({ key: x.key, name: x.name })),
-                  scenes: scenes.map((s) => ({ prompt: s.prompt || "", genDur: s.genDur || 0, imageKey: s.imageKey || null, imageName: s.image ? s.image.name : null, refKey: s.refKey || null, refName: s.refImage ? s.refImage.name : null, videoKey: s.videoKey || null })) };
+                  scenes: scenes.map((s) => ({ prompt: s.prompt || "", imagePrompt: s.imagePrompt || "", genDur: s.genDur || 0, imageKey: s.imageKey || null, imageName: s.image ? s.image.name : null, refKey: s.refKey || null, refName: s.refImage ? s.refImage.name : null, videoKey: s.videoKey || null })) };
       localStorage.setItem("creator_project", JSON.stringify(p));
     } catch {}
     updateCacheInfo();
@@ -395,7 +406,7 @@ async function loadProject() {
   if (!Array.isArray(p.scenes) || !p.scenes.length) return false;
   scenes = [];
   for (const ps of p.scenes) {
-    const sc = { id: idSeq++, image: null, imageThumb: null, imageKey: ps.imageKey || null, refImage: null, refThumb: null, refKey: ps.refKey || null, prompt: ps.prompt || "", genDur: ps.genDur || 0, video: null, videoThumb: null, videoKey: ps.videoKey || null, fromCache: false, genStatus: "idle", genSecs: 0, predId: null, error: "", el: null };
+    const sc = { id: idSeq++, image: null, imageThumb: null, imageKey: ps.imageKey || null, refImage: null, refThumb: null, refKey: ps.refKey || null, prompt: ps.prompt || "", imagePrompt: ps.imagePrompt || "", imgBusy: false, imgErr: false, imgStatus: "", genDur: ps.genDur || 0, video: null, videoThumb: null, videoKey: ps.videoKey || null, fromCache: false, genStatus: "idle", genSecs: 0, predId: null, error: "", el: null };
     scenes.push(sc);
     if (ps.imageKey) { const b = await idbGet(ps.imageKey); if (b) { sc.image = new File([b], ps.imageName || "image.jpg", { type: b.type || "image/jpeg" }); sc.imageThumb = await thumbOf(sc.image); } }
     if (ps.refKey) { const b = await idbGet(ps.refKey); if (b) { sc.refImage = new File([b], ps.refName || "ref.jpg", { type: b.type || "image/jpeg" }); sc.refThumb = await thumbOf(sc.refImage); } }
@@ -490,7 +501,7 @@ function oaModelLadder() {
 async function oaCall(body) {
   let lastErr = null;
   for (const m of oaModelLadder()) {
-    const r = await fetch(OPENAI + "/responses", { method: "POST", headers: { Authorization: "Bearer " + getOAKey(), "Content-Type": "application/json" }, body: JSON.stringify({ ...body, model: m }) });
+    const r = await fetch(openaiBase() + "/responses", { method: "POST", headers: { Authorization: "Bearer " + getOAKey(), "Content-Type": "application/json" }, body: JSON.stringify({ ...body, model: m }) });
     const text = await r.text();
     if (r.ok) { localStorage.setItem("openai_model_ok", m); console.log("[openai] using model", m); try { return JSON.parse(text); } catch { throw new Error("OpenAI returned non-JSON"); } }
     const modelMissing = (r.status === 404 || r.status === 400) && /model/i.test(text) && /(not.*(found|exist)|invalid|unknown|does not exist|no access|not available)/i.test(text);
@@ -509,6 +520,73 @@ function oaText(resp) {
     if (typeof o === "object") { if (o.type === "output_text" && typeof o.text === "string") parts.push(o.text); Object.values(o).forEach(walk); }
   })(resp.output || resp);
   return parts.join("\n").trim();
+}
+
+// ---------- OpenAI image generation (gpt-image, per-scene first frame) ----------
+function oaImageLadder() {
+  const l = [...OA_IMAGE_MODELS];
+  const ok = localStorage.getItem("openai_image_model_ok");
+  if (ok) { const i = l.indexOf(ok); if (i > 0) { l.splice(i, 1); l.unshift(ok); } else if (i < 0) l.unshift(ok); }
+  return l;
+}
+function b64ToFile(b64, name) {
+  const bin = atob(b64); const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new File([bytes], name, { type: "image/png" });
+}
+// prompt + optional reference image → PNG File. Settings: quality low, png, 9:16-ish (1024×1536).
+async function oaGenerateImage(prompt, refFile) {
+  let lastErr = null;
+  for (const model of oaImageLadder()) {
+    let r;
+    if (refFile) { // ref image → edits endpoint (multipart; ref downscaled to keep it small)
+      const small = await compressImage(refFile, 1024, 0.9);
+      const fd = new FormData();
+      fd.append("model", model);
+      fd.append("image", small, small.name || "ref.png");
+      fd.append("prompt", prompt);
+      fd.append("n", "1");
+      fd.append("size", "1024x1536");
+      fd.append("quality", "low");
+      fd.append("output_format", "png");
+      r = await fetch(openaiBase() + "/images/edits", { method: "POST", headers: { Authorization: "Bearer " + getOAKey() }, body: fd });
+    } else { // no ref → text-to-image
+      r = await fetch(openaiBase() + "/images/generations", { method: "POST", headers: { Authorization: "Bearer " + getOAKey(), "Content-Type": "application/json" }, body: JSON.stringify({ model, prompt, n: 1, size: "1024x1536", quality: "low", output_format: "png" }) });
+    }
+    const text = await r.text();
+    if (r.ok) {
+      localStorage.setItem("openai_image_model_ok", model); console.log("[openai-image] using model", model);
+      let j; try { j = JSON.parse(text); } catch { throw new Error("Image API returned non-JSON"); }
+      const d = (j.data && j.data[0]) || {};
+      if (d.b64_json) return b64ToFile(d.b64_json, "scene_img.png");
+      if (d.url) { const ir = await fetch(d.url); return new File([await ir.blob()], "scene_img.png", { type: "image/png" }); }
+      throw new Error("No image in response → " + text.slice(0, 160));
+    }
+    const missing = (r.status === 404 || r.status === 400) && /model/i.test(text) && /(not.*(found|exist)|invalid|unknown|does not exist|no access|not available|unsupported)/i.test(text);
+    if (missing) { console.warn("[openai-image] model", model, "unavailable → next"); lastErr = new Error("Image model " + model + " unavailable"); continue; }
+    if (r.status === 401) throw new Error("OpenAI auth failed (401) — re-check your OpenAI key in Step 1.");
+    throw new Error("Image gen failed (" + r.status + "): " + text.slice(0, 220));
+  }
+  throw lastErr || new Error("No usable image model (tried " + OA_IMAGE_MODELS.join(", ") + ")");
+}
+async function generateSceneImage(sc) {
+  if (!getOAKey()) { sc.imgErr = true; sc.imgStatus = "Add your OpenAI key in Step 1 first."; renderScene(sc); return; }
+  if (!(sc.imagePrompt || "").trim()) { sc.imgErr = true; sc.imgStatus = "Type an image prompt first."; renderScene(sc); return; }
+  sc.imgBusy = true; sc.imgErr = false; sc.imgStatus = "Generating image…"; renderScene(sc); refreshBuild();
+  const t0 = Date.now();
+  const tick = setInterval(() => { if (sc.imgBusy) { sc.imgStatus = "Generating image… (" + Math.round((Date.now() - t0) / 1000) + "s)"; renderScene(sc); } }, 1000);
+  try {
+    const img = await oaGenerateImage(sc.imagePrompt.trim(), sc.refImage || null);
+    sc.image = img; sc.imageThumb = await thumbOf(img);
+    try { const k = "img:" + (await sha256Hex(img)); await idbPut(k, img); sc.imageKey = k; } catch {}
+    sc.imgErr = false; sc.imgStatus = "✓ Image generated — set as first frame";
+  } catch (e) {
+    let m = (e && e.message) ? e.message : String(e);
+    if (/failed to fetch|networkerror|load failed/i.test(m)) m = "Network blocked reaching OpenAI. Run the app from your Mac (node serve.js) so it routes through the relay, or set a relay endpoint.";
+    sc.imgErr = true; sc.imgStatus = "⚠ " + m;
+  } finally {
+    clearInterval(tick); sc.imgBusy = false; renderScenes(); refreshBuild(); saveProject();
+  }
 }
 
 // ---------- product photos ----------
@@ -831,7 +909,7 @@ async function generateScene(scene, force) {
 }
 
 // ---------- scenes UI ----------
-function newScene() { return { id: idSeq++, image: null, imageThumb: null, imageKey: null, refImage: null, refThumb: null, refKey: null, prompt: "", genDur: 0, video: null, videoThumb: null, videoKey: null, fromCache: false, genStatus: "idle", genSecs: 0, predId: null, error: "", el: null }; }
+function newScene() { return { id: idSeq++, image: null, imageThumb: null, imageKey: null, refImage: null, refThumb: null, refKey: null, prompt: "", imagePrompt: "", imgBusy: false, imgErr: false, imgStatus: "", genDur: 0, video: null, videoThumb: null, videoKey: null, fromCache: false, genStatus: "idle", genSecs: 0, predId: null, error: "", el: null }; }
 function addScene() { scenes.push(newScene()); renderScenes(); refreshBuild(); saveProject(); }
 function removeScene(sc) { scenes = scenes.filter((s) => s !== sc); renderScenes(); refreshBuild(); saveProject(); }
 function moveScene(sc, dir) { const i = scenes.indexOf(sc), j = i + dir; if (j < 0 || j >= scenes.length) return; scenes[i] = scenes[j]; scenes[j] = sc; renderScenes(); refreshBuild(); saveProject(); }
@@ -885,6 +963,13 @@ function renderScenes() {
     drops.append(makeDrop(sc, "image", "imageThumb", "＋ First-frame photo", "image/*"),
                  makeDrop(sc, "refImage", "refThumb", "＋ Reference (optional)", "image/*"));
 
+    // ---- Generate first-frame image with OpenAI (gpt-image) ----
+    const imgGenWrap = document.createElement("div"); imgGenWrap.className = "durrow"; imgGenWrap.style.flexWrap = "wrap";
+    const imgTa = document.createElement("textarea"); imgTa.placeholder = "Image prompt — generate the first frame (uses the Reference image if you add one)"; imgTa.style.minHeight = "44px"; imgTa.value = sc.imagePrompt || ""; imgTa.oninput = () => sc.imagePrompt = imgTa.value; imgTa.onblur = saveProject;
+    const imgGen = document.createElement("button"); imgGen.className = "ghost"; imgGen.textContent = "🖼️ Generate first-frame image"; imgGen.style.marginTop = "0"; imgGen.onclick = () => generateSceneImage(sc);
+    const imgStat = document.createElement("div"); imgStat.className = "scnstatus"; imgStat.style.width = "100%";
+    imgGenWrap.append(imgTa, imgGen, imgStat);
+
     const ta = document.createElement("textarea"); ta.placeholder = "Describe the video for this scene…"; ta.value = sc.prompt || ""; ta.oninput = () => { sc.prompt = ta.value; updateDurLabel(sc); }; ta.onblur = saveProject;
 
     const durRow = document.createElement("div"); durRow.className = "durrow";
@@ -909,7 +994,7 @@ function renderScenes() {
 
     const body = document.createElement("div"); body.className = "scenebody";
     const mainCol = document.createElement("div"); mainCol.className = "scnmain";
-    mainCol.append(drops, ta, durRow, actions, bar, stat);
+    mainCol.append(drops, imgGenWrap, ta, durRow, actions, bar, stat);
     const preview = document.createElement("div"); preview.className = "scnpreview pvbox";
     const ph = document.createElement("div"); ph.className = "scnph"; ph.textContent = "Preview";
     const vid = document.createElement("video"); vid.className = "scnvid"; vid.muted = true; vid.playsInline = true; // thumbnail; tap to open
@@ -920,7 +1005,7 @@ function renderScenes() {
 
     card.append(head, body);
     c.appendChild(card);
-    sc.el = { gen, stat, bar, vid, ph, expand, durAuto };
+    sc.el = { gen, stat, bar, vid, ph, expand, durAuto, imgGen, imgStat };
     updateDurLabel(sc);
     renderScene(sc);
   });
@@ -932,6 +1017,8 @@ function renderScene(sc) {
   const busy = ["uploading", "queued", "processing", "starting", "running"].includes(sc.genStatus);
   e.gen.disabled = building || busy || !getKey() || !sc.image;
   e.bar.style.display = busy ? "block" : "none";
+  if (e.imgGen) e.imgGen.disabled = building || sc.imgBusy || !getOAKey();
+  if (e.imgStat) { e.imgStat.textContent = sc.imgStatus || ""; e.imgStat.className = "scnstatus " + (sc.imgErr ? "bad" : (/^✓/.test(sc.imgStatus || "") ? "ok" : "")); }
   if (sc.genStatus === "done" && sc.video) {
     const want = desiredDur(sc);
     const mismatch = want && sc.realDur && Math.abs(sc.realDur - want) > 0.3;

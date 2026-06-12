@@ -41,6 +41,21 @@ export default {
       }
     }
 
+    // /openai/v1/* → forward to OpenAI (so browser-blocked/CORS-less OpenAI calls work)
+    if (url.pathname.startsWith("/openai/v1/")) {
+      const oTarget = "https://api.openai.com" + url.pathname.replace(/^\/openai/, "") + url.search;
+      const h = new Headers();
+      if (request.headers.get("Authorization")) h.set("Authorization", request.headers.get("Authorization"));
+      if (request.headers.get("Content-Type")) h.set("Content-Type", request.headers.get("Content-Type"));
+      try {
+        const up = await fetch(oTarget, { method: request.method, headers: h, body: (request.method === "GET" || request.method === "HEAD") ? undefined : request.body });
+        const oh = new Headers(up.headers); for (const [k, v] of Object.entries(cors)) oh.set(k, v);
+        return new Response(up.body, { status: up.status, headers: oh });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: "openai relay failed: " + e.message }), { status: 502, headers: { ...cors, "Content-Type": "application/json" } });
+      }
+    }
+
     // Forward the same path/query to Atlas (e.g. /api/v1/model/uploadMedia)
     const target = ATLAS + url.pathname + url.search;
     const headers = new Headers();
