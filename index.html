@@ -142,7 +142,7 @@
     </select>
     <div class="hint" id="vidTypeHint"></div>
 
-    <label style="margin-top:14px">Product photos</label>
+    <label style="margin-top:14px" id="prodLabel">Product photos</label>
     <div class="prodgrid" id="prodGrid"></div>
     <input id="prodInput" type="file" accept="image/*" multiple hidden />
     <button class="ghost" id="researchBtn" type="button" disabled>🔎 Identify &amp; deep-research product</button>
@@ -564,6 +564,7 @@ function updateTypeUI() {
     ? t.label + " → aim for ≈" + t.scenes + " scenes (8s each ≈ " + fmtDur(t.scenes * 8) + "). End-scene CTA: " + ctaTxt
     : t.label + " → as many scenes as you like (8s each). End-scene CTA: " + ctaTxt;
   $("sceneTarget").textContent = t.scenes ? "target ≈ " + t.scenes + " scenes · " + t.cta + " CTA" : "no length limit · " + t.cta + " CTA";
+  $("prodLabel").textContent = t.cta === "product" ? "Product photos" : "Product photos — optional for growth videos";
 }
 $("vidType").onchange = (e) => { videoType = e.target.value; updateTypeUI(); saveProject(); };
 
