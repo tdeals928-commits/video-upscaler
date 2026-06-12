@@ -136,7 +136,9 @@
     <select id="vidType">
       <option value="growth30">Growth — 30s · CTA: follow / engagement</option>
       <option value="growth60">Growth — 1 min · CTA: follow / engagement</option>
+      <option value="growthFree">Growth — no time limit · CTA: follow / engagement</option>
       <option value="product155">Product — ~2:35 · CTA: product</option>
+      <option value="productFree">Product — no time limit · CTA: product</option>
     </select>
     <div class="hint" id="vidTypeHint"></div>
 
@@ -223,9 +225,11 @@ let productPhotos = [], research = "", researchName = "", researching = false, v
 
 // ---------- video types ----------
 const VID_TYPES = {
-  growth30:  { label: "Growth 30s",     secs: 30,  scenes: 4,  cta: "follow / engagement" },
-  growth60:  { label: "Growth 1 min",   secs: 60,  scenes: 8,  cta: "follow / engagement" },
-  product155:{ label: "Product ~2:35",  secs: 155, scenes: 19, cta: "product" },
+  growth30:   { label: "Growth 30s",            secs: 30,  scenes: 4,    cta: "follow / engagement" },
+  growth60:   { label: "Growth 1 min",          secs: 60,  scenes: 8,    cta: "follow / engagement" },
+  growthFree: { label: "Growth (no limit)",     secs: null, scenes: null, cta: "follow / engagement" },
+  product155: { label: "Product ~2:35",         secs: 155, scenes: 19,   cta: "product" },
+  productFree:{ label: "Product (no limit)",    secs: null, scenes: null, cta: "product" },
 };
 // ---------- OpenAI (product research) ----------
 const OPENAI = "https://api.openai.com/v1";
@@ -555,9 +559,11 @@ $("researchBtn").onclick = async () => {
 function updateTypeUI() {
   const t = VID_TYPES[videoType] || VID_TYPES.growth30;
   $("vidType").value = videoType;
-  $("vidTypeHint").textContent = t.label + " → aim for ≈" + t.scenes + " scenes (8s each ≈ " + fmtDur(t.scenes * 8) + "). End-scene CTA: " +
-    (t.cta === "product" ? "send viewers to the product (link in bio, shop now)." : "ask for a follow + a comment/engagement — no product push.");
-  $("sceneTarget").textContent = "target ≈ " + t.scenes + " scenes · " + t.cta + " CTA";
+  const ctaTxt = t.cta === "product" ? "send viewers to the product (link in bio, shop now)." : "ask for a follow + a comment/engagement — no product push.";
+  $("vidTypeHint").textContent = t.scenes
+    ? t.label + " → aim for ≈" + t.scenes + " scenes (8s each ≈ " + fmtDur(t.scenes * 8) + "). End-scene CTA: " + ctaTxt
+    : t.label + " → as many scenes as you like (8s each). End-scene CTA: " + ctaTxt;
+  $("sceneTarget").textContent = t.scenes ? "target ≈ " + t.scenes + " scenes · " + t.cta + " CTA" : "no length limit · " + t.cta + " CTA";
 }
 $("vidType").onchange = (e) => { videoType = e.target.value; updateTypeUI(); saveProject(); };
 
