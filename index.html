@@ -202,7 +202,7 @@
       <option value="on">Cut silent gaps — tighten each clip (recommended)</option>
       <option value="off">Off — keep clips as generated</option>
     </select>
-    <div class="hint">Detects silent pauses inside each clip and removes them (jump-cut style) so there's no dead air between lines — the biggest retention lever for talking videos. Skips clips that have no audio.</div>
+    <div class="hint">Detects silent pauses inside each clip and removes them (jump-cut style) so there's no dead air between lines; leading/trailing silence and black fade-in frames are cut completely — the biggest retention lever for talking videos. Skips clips that have no audio.</div>
 
     <label style="margin-top:12px">Clip length fix</label>
     <select id="conformSel">
@@ -248,7 +248,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v38"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v39"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() { return (localStorage.getItem("atlas_base") || ATLAS_DEFAULT).replace(/\/+$/, ""); }
 const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
@@ -286,7 +286,7 @@ function cutSilence() { return localStorage.getItem("cut_silence") !== "off"; } 
 async function detectSilence(inName) {
   const logs = []; const h = ({ message }) => logs.push(message);
   ffmpeg.on("log", h);
-  try { await ffmpeg.exec(["-i", inName, "-vn", "-af", "silencedetect=noise=-30dB:d=0.35", "-f", "null", "-"]); } catch {}
+  try { await ffmpeg.exec(["-i", inName, "-vn", "-af", "silencedetect=noise=-30dB:d=0.22", "-f", "null", "-"]); } catch {}
   ffmpeg.off("log", h);
   const sil = []; let start = null;
   for (const line of logs.join("\n").split("\n")) {
@@ -295,10 +295,28 @@ async function detectSilence(inName) {
   }
   return sil; // [start,end] silent regions
 }
+// Detect black frames at the very start of a clip (Seedance fade-ins). Returns
+// the offset (s) where real picture begins, capped at 1.5s. Scans first 3s only.
+async function detectLeadingBlack(inName) {
+  const logs = []; const h = ({ message }) => logs.push(message);
+  ffmpeg.on("log", h);
+  try { await ffmpeg.exec(["-t", "3", "-i", inName, "-vf", "blackdetect=d=0.05:pix_th=0.10", "-an", "-f", "null", "-"]); } catch {}
+  ffmpeg.off("log", h);
+  for (const line of logs.join("\n").split("\n")) {
+    const m = line.match(/black_start:\s*(-?[\d.]+).*?black_end:\s*([\d.]+)/);
+    if (m && parseFloat(m[1]) <= 0.05) return Math.min(1.5, parseFloat(m[2]));
+  }
+  return 0;
+}
 // Convert silent regions → the segments to KEEP (with a little padding around speech).
 function silenceToKeeps(sil, totalDur, pad) {
   const cuts = [];
-  for (const [s, e] of sil) { const cs = s + pad, ce = e - pad; if (ce - cs > 0.05) cuts.push([Math.max(0, cs), Math.min(totalDur, ce)]); }
+  for (const [s, e] of sil) {
+    const atStart = s <= 0.05, atEnd = e >= totalDur - 0.05;
+    const cs = atStart ? 0 : s + pad;        // silence at the very start: cut from 0 (no stub)
+    const ce = atEnd ? totalDur : e - pad;   // silence at the very end: cut to the end (no stub)
+    if (ce - cs > 0.05) cuts.push([Math.max(0, cs), Math.min(totalDur, ce)]);
+  }
   cuts.sort((a, b) => a[0] - b[0]);
   const keeps = []; let pos = 0;
   for (const [cs, ce] of cuts) { if (cs > pos + 0.02) keeps.push([pos, cs]); pos = Math.max(pos, ce); }
@@ -1202,12 +1220,19 @@ async function build() {
       // visual quality — so we keep CRF 18 (visually lossless) but encode much faster.
       const tailEnc = ["-c:v", "libx264", "-crf", String(CRF), "-preset", "veryfast", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-f", "mpegts", seg];
 
+      // ---- Leading black frames (Seedance fade-ins): start the clip where picture begins ----
+      let startOff = 0;
+      try { startOff = await detectLeadingBlack(inName); } catch {}
+      if (startOff > 0.03) console.log("[assemble] clip " + (i + 1) + ": skipping " + startOff.toFixed(2) + "s of leading black");
+      else startOff = 0;
+
       // ---- Dead-space removal: cut silent gaps inside the clip (audio clips only) ----
       let keeps = null;
       if (cutSilence() && hasA) {
         let dur = clips[i].realDur; if (!dur) { try { dur = await durationOf(clips[i].video); } catch {} }
         if (dur > 0.5) {
-          const k = silenceToKeeps(await detectSilence(inName), dur, 0.10);
+          let k = silenceToKeeps(await detectSilence(inName), dur, 0.06);
+          if (startOff) k = k.map(([s, e]) => [Math.max(s, startOff), e]).filter(([s, e]) => e - s > 0.08);
           const kept = k.reduce((a, [s, e]) => a + (e - s), 0);
           if (k.length && kept > 0.4 && kept < dur - 0.2) {
             keeps = k;
@@ -1229,6 +1254,7 @@ async function build() {
         const want = desiredDur(clips[i]);
         let actual = clips[i].realDur;
         if (want && !actual) { try { actual = await durationOf(clips[i].video); } catch {} }
+        if (actual && startOff) actual = Math.max(0.1, actual - startOff);
         const mode = conformMode();
         let vSpeed = "", aSpeed = "", trimArgs = [];
         if (want && actual && Math.abs(actual - want) > 0.3 && mode !== "off") {
@@ -1242,9 +1268,10 @@ async function build() {
         }
         const vf = `[0:v]${padVf}${vSpeed}[v]`;
         const tail = [...trimArgs, ...tailEnc];
+        const ss = startOff ? ["-ss", startOff.toFixed(3)] : []; // skip leading black
         args = hasA
-          ? ["-i", inName, "-filter_complex", vf + ";[0:a]aresample=48000,aformat=channel_layouts=stereo" + aSpeed + "[a]", "-map", "[v]", "-map", "[a]", ...tail]
-          : ["-i", inName, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", vf, "-map", "[v]", "-map", "1:a", "-shortest", ...tail];
+          ? [...ss, "-i", inName, "-filter_complex", vf + ";[0:a]aresample=48000,aformat=channel_layouts=stereo" + aSpeed + "[a]", "-map", "[v]", "-map", "[a]", ...tail]
+          : [...ss, "-i", inName, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", vf, "-map", "[v]", "-map", "1:a", "-shortest", ...tail];
       }
       await ffmpeg.exec(args);
       segs.push(seg);
