@@ -250,7 +250,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v41"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v42"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() { return (localStorage.getItem("atlas_base") || ATLAS_DEFAULT).replace(/\/+$/, ""); }
 const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
@@ -1155,7 +1155,7 @@ function renderScene(sc) {
       (sc.realDur ? " · " + sc.realDur.toFixed(1) + "s" : "") +
       (mismatch ? " (target " + want + "s — will be " + (conformMode() === "off" ? "left as-is" : conformMode() === "trim" ? "trimmed" : "speed-adjusted") + ")" : "") +
       " · " + fmtSize(sc.video.size);
-    if (!e.vid.src) e.vid.src = URL.createObjectURL(sc.video);
+    if (e.vidFor !== sc.video) { if (e.vid.src) { try { URL.revokeObjectURL(e.vid.src); } catch {} } e.vid.src = URL.createObjectURL(sc.video); e.vid.load(); e.vidFor = sc.video; }
     e.vid.style.display = "block"; e.ph.style.display = "none"; e.expand.style.display = "flex"; e.gen.textContent = "✨ Re-generate";
   } else if (sc.genStatus === "error") {
     e.stat.className = "scnstatus bad"; e.stat.textContent = "⚠ " + (sc.error || "Failed"); e.vid.style.display = "none"; e.ph.style.display = ""; e.expand.style.display = "none";
@@ -1175,7 +1175,7 @@ function openPreview(sc) {
   const m = $("pvModal"), v = $("pvVideo"), img = $("pvImg");
   img.style.display = "none"; img.removeAttribute("src");
   v.style.display = "block";
-  v.src = (sc.el && sc.el.vid && sc.el.vid.src) ? sc.el.vid.src : URL.createObjectURL(sc.video);
+  v.src = URL.createObjectURL(sc.video);
   m.classList.add("open");
   v.currentTime = 0; v.play().catch(() => {});
 }
