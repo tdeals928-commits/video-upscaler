@@ -70,6 +70,7 @@
   .modal { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.86); display: none; align-items: center; justify-content: center; padding: 24px; }
   .modal.open { display: flex; }
   .modal video { max-width: 100%; max-height: 84vh; border-radius: 12px; background: #000; }
+  .modal img { max-width: 100%; max-height: 84vh; border-radius: 12px; background: #000; object-fit: contain; }
   .mclose { position: absolute; top: calc(14px + env(safe-area-inset-top)); right: 16px; width: 40px; height: 40px; margin: 0; padding: 0; border-radius: 50%; background: #1b2430; border: 1px solid var(--border); color: #fff; font-size: 18px; }
   .progress-wrap { display: none; margin-top: 14px; }
   .bar { height: 10px; background: #0d1117; border: 1px solid var(--border); border-radius: 99px; overflow: hidden; }
@@ -242,13 +243,14 @@
 <div class="modal" id="pvModal">
   <button class="mclose" id="pvClose" type="button">✕</button>
   <video id="pvVideo" controls playsinline></video>
+  <img id="pvImg" alt="" style="display:none" />
 </div>
 
 <script src="vendor/ffmpeg.js"></script>
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v40"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v41"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() { return (localStorage.getItem("atlas_base") || ATLAS_DEFAULT).replace(/\/+$/, ""); }
 const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
@@ -643,7 +645,7 @@ function paintGref() {
   if (globalRefThumb) {
     const im = document.createElement("img"); im.src = globalRefThumb; d.appendChild(im);
     const cl = document.createElement("button"); cl.className = "clear"; cl.textContent = "✕";
-    cl.onclick = (e) => { e.stopPropagation(); globalRef = null; globalRefThumb = null; globalRefKey = null; paintGref(); saveProject(); };
+    cl.onclick = (e) => { e.stopPropagation(); globalRef = null; globalRefThumb = null; globalRefKey = null; paintGref(); renderScenes(); refreshBuild(); saveProject(); };
     d.appendChild(cl); lbl.style.display = "none";
   } else lbl.style.display = "";
 }
@@ -651,7 +653,7 @@ async function setGref(f) {
   if (!f || !(f.type || "").startsWith("image")) return;
   globalRef = f; globalRefThumb = await thumbOf(f);
   try { globalRefKey = "img:" + (await sha256Hex(f)); await idbPut(globalRefKey, f); } catch {}
-  paintGref(); saveProject();
+  paintGref(); renderScenes(); refreshBuild(); saveProject();
 }
 $("grefDrop").onclick = () => $("grefInput").click();
 $("grefInput").onchange = (e) => { setGref(e.target.files[0]); e.target.value = ""; };
@@ -1037,7 +1039,9 @@ function makeDrop(sc, field, thumbField, label, accept) {
     const t = sc[thumbField];
     d.querySelectorAll("img,.clear").forEach((x) => x.remove());
     if (t) {
-      const im = document.createElement("img"); im.src = t; d.appendChild(im);
+      const im = document.createElement("img"); im.src = t; im.style.cursor = "zoom-in"; im.title = "Click to preview";
+      im.onclick = (e) => { e.stopPropagation(); openImagePreview(sc[thumbField]); };
+      d.appendChild(im);
       const cl = document.createElement("button"); cl.className = "clear"; cl.textContent = "✕";
       cl.onclick = (e) => { e.stopPropagation(); sc[field] = null; sc[thumbField] = null; sc[keyField] = null; paint(); refreshBuild(); if (sc.el) renderScene(sc); saveProject(); };
       d.appendChild(cl); lbl.style.display = "none";
@@ -1058,6 +1062,18 @@ function makeDrop(sc, field, thumbField, label, accept) {
   return d;
 }
 
+function makeGlobalRefTile() {
+  const d = document.createElement("div"); d.className = "drop"; d.style.cursor = "pointer";
+  if (globalRefThumb) {
+    const im = document.createElement("img"); im.src = globalRefThumb; d.appendChild(im);
+    d.title = "Global reference (used for this scene's image generation) — click to preview";
+    d.onclick = () => openImagePreview(globalRefThumb);
+  } else {
+    const lbl = document.createElement("span"); lbl.className = "dlabel"; lbl.textContent = "Global reference — add above"; d.appendChild(lbl);
+    d.onclick = () => $("grefInput").click();
+  }
+  return d;
+}
 function renderScenes() {
   const c = $("scenes"); c.innerHTML = "";
   if (!scenes.length) { addSceneSilently(); }
@@ -1073,8 +1089,7 @@ function renderScenes() {
     head.append(title, ord, rm);
 
     const drops = document.createElement("div"); drops.className = "drops";
-    drops.append(makeDrop(sc, "image", "imageThumb", "＋ First-frame photo", "image/*"),
-                 makeDrop(sc, "refImage", "refThumb", "＋ Scene ref (overrides global)", "image/*"));
+    drops.append(makeDrop(sc, "image", "imageThumb", "＋ First-frame photo", "image/*"), makeGlobalRefTile());
 
     // ---- Generate first-frame image with OpenAI (gpt-image) ----
     const imgGenWrap = document.createElement("div"); imgGenWrap.className = "durrow"; imgGenWrap.style.flexWrap = "wrap";
@@ -1157,12 +1172,21 @@ $("clearProject").onclick = () => { if (confirm("Clear all scenes and cached cli
 // ---------- tap-to-open preview lightbox ----------
 function openPreview(sc) {
   if (!sc.video) return;
-  const m = $("pvModal"), v = $("pvVideo");
+  const m = $("pvModal"), v = $("pvVideo"), img = $("pvImg");
+  img.style.display = "none"; img.removeAttribute("src");
+  v.style.display = "block";
   v.src = (sc.el && sc.el.vid && sc.el.vid.src) ? sc.el.vid.src : URL.createObjectURL(sc.video);
   m.classList.add("open");
   v.currentTime = 0; v.play().catch(() => {});
 }
-function closePreview() { const v = $("pvVideo"); $("pvModal").classList.remove("open"); v.pause(); }
+function openImagePreview(src) {
+  if (!src) return;
+  const m = $("pvModal"), v = $("pvVideo"), img = $("pvImg");
+  v.pause(); v.style.display = "none"; v.removeAttribute("src");
+  img.src = src; img.style.display = "block";
+  m.classList.add("open");
+}
+function closePreview() { const v = $("pvVideo"); $("pvModal").classList.remove("open"); v.pause(); $("pvImg").removeAttribute("src"); }
 $("pvClose").onclick = closePreview;
 $("pvModal").onclick = (e) => { if (e.target === $("pvModal")) closePreview(); };
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePreview(); });
