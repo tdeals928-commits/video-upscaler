@@ -248,7 +248,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v39"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v40"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() { return (localStorage.getItem("atlas_base") || ATLAS_DEFAULT).replace(/\/+$/, ""); }
 const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
@@ -1215,7 +1215,9 @@ async function build() {
       const inName = "in_" + clips[i].id + ".mp4", seg = "seg_" + i + ".ts";
       await ffmpeg.writeFile(inName, await fetchFile(clips[i].video));
       const hasA = await probeHasAudio(inName);
-      const padVf = `scale=${CANVAS_W}:${CANVAS_H}:force_original_aspect_ratio=decrease,pad=${CANVAS_W}:${CANVAS_H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p`;
+      // Fill the 9:16 canvas: scale to COVER then center-crop (Seedance outputs e.g.
+      // 496x864, slightly wider than 9:16 - fit+pad left thin black bars top/bottom).
+      const padVf = `scale=${CANVAS_W}:${CANVAS_H}:force_original_aspect_ratio=increase,crop=${CANVAS_W}:${CANVAS_H},setsar=1,fps=30,format=yuv420p`;
       // veryfast: at a fixed CRF the preset only trades encode-time vs file size, NOT
       // visual quality — so we keep CRF 18 (visually lossless) but encode much faster.
       const tailEnc = ["-c:v", "libx264", "-crf", String(CRF), "-preset", "veryfast", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-f", "mpegts", seg];
