@@ -10,10 +10,22 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4100;
+let boundPort = PORT; // actual listening port (autoPort may differ)
+
+// First non-internal IPv4 — the address a phone on the same Wi-Fi uses to reach this Mac.
+function lanIP() {
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni.family === "IPv4" && !ni.internal) return ni.address;
+    }
+  }
+  return null;
+}
 const ATLAS = "https://api.atlascloud.ai";
 const TYPES = {
   ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
@@ -89,6 +101,10 @@ http.createServer((req, res) => {
   if (req.url.startsWith("/api/v1/")) return relay(req, res, ATLAS + req.url);
   if (req.url.startsWith("/openai/v1/")) return relay(req, res, OPENAI + req.url.replace(/^\/openai/, ""));
   if (req.url.startsWith("/fetch?")) return fetchRelay(req, res);
+  if (req.url.startsWith("/__addr")) {
+    res.writeHead(200, { ...corsHeaders(req), "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ port: boundPort, lan: lanIP() }));
+  }
 
   let rel = decodeURIComponent(req.url.split("?")[0]);
   if (rel === "/") rel = "/index.html";
@@ -99,4 +115,13 @@ http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream" });
     res.end(data);
   });
-}).listen(PORT, () => console.log(`\n  App + relays      →  http://localhost:${PORT}\n  Atlas relay       →  http://localhost:${PORT}/api/v1\n  OpenAI relay      →  http://localhost:${PORT}/openai/v1\n`));
+}).listen(PORT, function () {
+  boundPort = this.address().port;
+  const lan = lanIP();
+  console.log(
+    `\n  App + relays      →  http://localhost:${boundPort}` +
+    (lan ? `\n  On your phone     →  http://${lan}:${boundPort}  (same Wi-Fi)` : "") +
+    `\n  Atlas relay       →  http://localhost:${boundPort}/api/v1` +
+    `\n  OpenAI relay      →  http://localhost:${boundPort}/openai/v1\n`
+  );
+});

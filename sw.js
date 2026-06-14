@@ -3,7 +3,7 @@
 // Pattern: do NOT skipWaiting on install — the page shows an "update ready" toast
 // and posts {type:"SKIP_WAITING"} when the user accepts, so updates never reload
 // mid-generation.
-const CACHE = "creator-v43";
+const CACHE = "creator-v44";
 const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg"];
 
 self.addEventListener("install", (e) => {
