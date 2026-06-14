@@ -275,7 +275,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v48"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v49"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() {
   const o = localStorage.getItem("atlas_base"); if (o) return o.replace(/\/+$/, "");
@@ -1224,35 +1224,35 @@ function renderScene(sc) {
 }
 
 async function generateAll() {
-  if (autoRunning) { autoStop = true; const s2 = $("genAllStatus"); if (s2) s2.textContent = "⏹ Stopping after this scene…"; return; }
+  if (autoRunning) { autoStop = true; const s2 = $("genAllStatus"); if (s2) s2.textContent = "⏹ Stopping — letting in-flight scenes finish…"; return; }
   if (!scenes.length) { alert("Add or import scenes first."); return; }
   const imgNeeded = scenes.filter((x) => (x.imagePrompt || "").trim() && !x.image).length;
   if (imgNeeded && !getOAKey()) { alert("Add your OpenAI key in Step 1 to auto-generate first-frame images."); return; }
   if (!getKey()) { alert("Add your Atlas key in Step 1 to auto-generate videos."); return; }
   const vidNeeded = scenes.filter((x) => !x.video).length;
-  if (!confirm("Auto-generate " + imgNeeded + " first-frame image(s), then " + vidNeeded + " video(s)?\n\nRuns one scene at a time and bills your OpenAI + Atlas accounts. Cached clips reload free.")) return;
+  if (!confirm("Auto-generate " + imgNeeded + " first-frame image(s) + " + vidNeeded + " video(s)?\n\nAll scene images start at once; each scene\u2019s video begins the moment its image is ready. Bills your OpenAI + Atlas accounts. Cached clips reload free.")) return;
   autoRunning = true; autoStop = false; updateGenAllBtn();
   scenes.forEach(renderScene); refreshBuild();
   const st = $("genAllStatus");
   try {
-    for (let i = 0; i < scenes.length; i++) {
-      if (autoStop) break;
-      const sc = scenes[i];
-      if ((sc.imagePrompt || "").trim() && !sc.image) {
-        if (st) { st.className = "scnstatus"; st.textContent = "🖼 Generating image " + (i + 1) + "/" + scenes.length + "…"; }
-        await generateSceneImage(sc);
+    const total = scenes.length;
+    let imgDone = 0, vidDone = 0;
+    const tick = () => { if (st) { st.className = "scnstatus"; st.textContent = "⚡ Generating in parallel — images " + imgDone + "/" + total + " · videos " + vidDone + "/" + total + "…"; } };
+    tick();
+    // Each scene is its own image→video pipeline and they all run at once: every image
+    // starts immediately, and a scene's video kicks off the moment that scene's image lands.
+    await Promise.allSettled(scenes.map(async (sc) => {
+      if (!autoStop && (sc.imagePrompt || "").trim() && !sc.image) {
+        try { await generateSceneImage(sc); } catch {}
       }
-    }
-    for (let i = 0; i < scenes.length; i++) {
-      if (autoStop) break;
-      const sc = scenes[i];
-      if (sc.image && !sc.video) {
-        if (st) { st.className = "scnstatus"; st.textContent = "🎬 Generating video " + (i + 1) + "/" + scenes.length + "…"; }
-        await generateScene(sc, false);
+      imgDone++; tick();
+      if (!autoStop && sc.image && !sc.video) {
+        try { await generateScene(sc, false); } catch {}
       }
-    }
+      vidDone++; tick();
+    }));
     const done = scenes.filter((x) => x.video).length;
-    if (st) { st.className = "scnstatus ok"; st.textContent = (autoStop ? "⏹ Stopped — " : "✓ Done — ") + done + "/" + scenes.length + " scene(s) have a clip." + (autoStop ? "" : " Ready to assemble."); }
+    if (st) { st.className = "scnstatus ok"; st.textContent = (autoStop ? "⏹ Stopped — " : "✓ Done — ") + done + "/" + total + " scene(s) have a clip." + (autoStop ? "" : " Ready to assemble."); }
   } catch (e) {
     if (st) { st.className = "scnstatus bad"; st.textContent = "⚠ Auto-generation error: " + (e && e.message ? e.message : e); }
   } finally {
