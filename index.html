@@ -165,7 +165,7 @@
 
   <!-- STEP 3: SCENES -->
   <div class="card">
-    <div class="step">3 · Scenes <span class="pill">9:16 · 4–12s · 480p · audio on</span> <span class="pill" id="sceneTarget"></span></div>
+    <div class="step">3 · Scenes <span class="pill">9:16 · 4–12s · <span id="resPill">480p</span> · audio on</span> <span class="pill" id="sceneTarget"></span></div>
 
     <div class="row" style="margin-bottom:10px">
       <div class="drop" id="grefDrop" style="flex:0 0 96px;min-height:64px">
@@ -174,6 +174,13 @@
       <div class="hint" style="margin:0;flex:1">Reference used for <b>image generation on every scene</b> (a scene’s own ref overrides it). Never sent to video generation.</div>
       <input id="grefInput" type="file" accept="image/*" hidden />
     </div>
+
+    <label style="margin-top:2px">Video resolution (all scenes)</label>
+    <select id="resSel">
+      <option value="480p">480p — faster &amp; cheaper (default)</option>
+      <option value="720p">720p — sharper, slower &amp; costs more</option>
+    </select>
+    <div class="hint" style="margin-bottom:12px">Seedance renders every scene at this resolution. The final video is still assembled to 1080×1920, so <b>720p gives a sharper result</b> (less upscaling). Switching means scenes must be re-generated — clips are cached per resolution.</div>
 
     <details style="margin-bottom:12px">
       <summary style="font-size:13px;color:var(--accent);cursor:pointer;font-weight:600">📥 Import all scene prompts (paste from Claude)</summary>
@@ -268,7 +275,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v47"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v48"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() {
   const o = localStorage.getItem("atlas_base"); if (o) return o.replace(/\/+$/, "");
@@ -311,6 +318,7 @@ function sceneDur(sc) { return sc.genDur || parsePromptDuration(sc.prompt) || 8;
 // Explicit target only (no 8s default) — used by the assembler's length fix.
 function desiredDur(sc) { return sc.genDur || parsePromptDuration(sc.prompt) || null; }
 function conformMode() { return "off"; } // Clip-length-fix UI removed; clips play at their generated length
+function videoRes() { return localStorage.getItem("video_res") === "720p" ? "720p" : "480p"; } // Seedance output resolution for all scenes
 // ---------- dead-space (silence) removal ----------
 function cutSilence() { return localStorage.getItem("cut_silence") !== "off"; } // default ON
 async function detectSilence(inName, noiseDb = 30, minDur = 0.22) {
@@ -443,7 +451,7 @@ async function sha256Hex(...parts) {
   return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 // A clip's cache key = hash of everything that determines its output.
-async function sceneCacheKey(sc) { return "vid:" + (await sha256Hex(sc.image, " ", sc.prompt || "", " ", MODEL + "|9:16|" + sceneDur(sc) + "|480p|audio")); }
+async function sceneCacheKey(sc) { return "vid:" + (await sha256Hex(sc.image, " ", sc.prompt || "", " ", MODEL + "|9:16|" + sceneDur(sc) + "|" + videoRes() + "|audio")); }
 
 let _saveT;
 function saveProject() {
@@ -877,6 +885,8 @@ function updateTypeUI() {
   $("prodLabel").textContent = t.cta === "product" ? "Product photos" : "Product photos — optional for growth videos";
 }
 $("vidType").onchange = (e) => { videoType = e.target.value; updateTypeUI(); saveProject(); };
+$("resSel").value = videoRes(); $("resPill").textContent = videoRes();
+$("resSel").onchange = (e) => { const v = e.target.value === "720p" ? "720p" : "480p"; localStorage.setItem("video_res", v); $("resPill").textContent = v; renderScenes(); refreshBuild(); };
 
 // ---------- Atlas Cloud client ----------
 // Tolerant extractors — the API's exact field names vary across its docs, so we
@@ -920,7 +930,7 @@ async function atlasGenerate(scene, onSize) {
     const dur = sceneDur(scene);
     console.log("[atlas] clip duration:", dur + "s", scene.genDur ? "(manual)" : "(auto from prompt/default)");
     // Video uses ONLY the first-frame image — the Reference image is for image generation only.
-    const body = { model: MODEL, prompt: scene.prompt || "", image: img, aspect_ratio: "9:16", duration: dur, resolution: "480p", generate_audio: true, camera_fixed: false, seed: -1 };
+    const body = { model: MODEL, prompt: scene.prompt || "", image: img, aspect_ratio: "9:16", duration: dur, resolution: videoRes(), generate_audio: true, camera_fixed: false, seed: -1 };
     const r = await fetch(atlasBase() + "/model/generateVideo", { method: "POST", headers: { Authorization: "Bearer " + getKey(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return { r, text: await r.text() };
   };
