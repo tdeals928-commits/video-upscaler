@@ -212,6 +212,18 @@
     </select>
     <div class="hint">Detects silent pauses inside each clip and removes them (jump-cut style) so there's no dead air between lines; leading/trailing silence and black fade-in frames are cut completely — the biggest retention lever for talking videos. Skips clips that have no audio.</div>
 
+    <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
+      <div class="hint" style="margin:0 0 8px"><b style="color:var(--text)">Already assembled a video elsewhere?</b> Import it and I'll cut the silent gaps the same way — on your device, keeping its original resolution. Needs an audio track.</div>
+      <input id="trimInput" type="file" accept="video/*" hidden />
+      <div class="drop" id="trimDrop" style="min-height:64px"><span class="dlabel" id="trimLabel">＋ Import a video to de-silence</span></div>
+      <button class="ghost" id="trimGo" type="button" disabled style="margin-top:8px">✂️ Cut silent gaps</button>
+      <div class="scnstatus" id="trimStatus" style="margin-top:6px"></div>
+      <div id="trimResult" style="display:none;margin-top:10px">
+        <video id="trimVid" controls playsinline style="width:100%;border-radius:10px;background:#000"></video>
+        <button class="good" id="trimSave" type="button" style="margin-top:8px">⬇︎ Download de-silenced video</button>
+      </div>
+    </div>
+
     <div class="hint">Final output: <b>1080×1920 (9:16) · CRF 18 (visually lossless) · faststart MP4</b>. Scenes are processed one at a time on your device.</div>
     <button class="good" id="build" type="button" disabled>Assemble &amp; upscale to 1080p</button>
     <div class="progress-wrap" id="progWrap">
@@ -250,7 +262,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v45"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v46"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() {
   const o = localStorage.getItem("atlas_base"); if (o) return o.replace(/\/+$/, "");
@@ -266,6 +278,7 @@ let ffmpeg = null, engineReady = false, building = false, autoRunning = false, a
 let scenes = [], idSeq = 1, musicFile = null, finalBlob = null;
 let productPhotos = [], research = "", researchName = "", researching = false, videoType = "growth30";
 let globalRef = null, globalRefThumb = null, globalRefKey = null; // one reference image for ALL scenes' image gen
+let trimFile = null, trimBlob = null, trimBusy = false; // standalone de-silence of an imported video
 
 // ---------- video types ----------
 const VID_TYPES = {
@@ -664,6 +677,22 @@ $("grefInput").onchange = (e) => { setGref(e.target.files[0]); e.target.value = 
 ["dragover", "dragenter"].forEach((ev) => $("grefDrop").addEventListener(ev, (e) => { e.preventDefault(); $("grefDrop").style.borderColor = "var(--accent)"; }));
 ["dragleave", "dragend"].forEach((ev) => $("grefDrop").addEventListener(ev, (e) => { e.preventDefault(); $("grefDrop").style.borderColor = ""; }));
 $("grefDrop").addEventListener("drop", (e) => { e.preventDefault(); $("grefDrop").style.borderColor = ""; setGref(e.dataTransfer.files && e.dataTransfer.files[0]); });
+
+// ---------- de-silence an imported video ----------
+function setTrimFile(f) {
+  if (!f) return;
+  trimFile = f; trimBlob = null;
+  $("trimLabel").textContent = "🎞 " + f.name;
+  $("trimGo").disabled = false; $("trimResult").style.display = "none";
+  $("trimStatus").className = "scnstatus"; $("trimStatus").textContent = "";
+}
+$("trimDrop").onclick = () => $("trimInput").click();
+$("trimInput").onchange = (e) => { setTrimFile(e.target.files[0]); e.target.value = ""; };
+["dragover", "dragenter"].forEach((ev) => $("trimDrop").addEventListener(ev, (e) => { e.preventDefault(); $("trimDrop").style.borderColor = "var(--accent)"; }));
+["dragleave", "dragend"].forEach((ev) => $("trimDrop").addEventListener(ev, (e) => { e.preventDefault(); $("trimDrop").style.borderColor = ""; }));
+$("trimDrop").addEventListener("drop", (e) => { e.preventDefault(); $("trimDrop").style.borderColor = ""; const fs = e.dataTransfer.files; setTrimFile(fs && [...fs].find((x) => x.type.startsWith("video/"))); });
+$("trimGo").onclick = trimImportedVideo;
+$("trimSave").onclick = () => { if (trimBlob) saveBlob(trimBlob, "desilenced.mp4"); };
 
 // ---------- bulk prompt import (paste from Claude) ----------
 function parseScenePrompts(text) {
@@ -1268,8 +1297,55 @@ async function probeHasAudio(name) {
 
 // ---------- assemble + upscale ----------
 let curStep = null;
+async function trimImportedVideo() {
+  if (trimBusy || !trimFile) return;
+  if (building) { const st0 = $("trimStatus"); st0.className = "scnstatus bad"; st0.textContent = "⚠ Wait for the assembly to finish, then try again."; return; }
+  trimBusy = true;
+  const st = $("trimStatus"), go = $("trimGo");
+  const set = (cls, msg) => { st.className = "scnstatus " + cls; st.textContent = msg; };
+  let ph = null;
+  go.disabled = true; $("trimResult").style.display = "none";
+  try {
+    set("", "Loading video engine…");
+    await loadEngine();
+    const inName = "trim_in.mp4", outName = "trim_out.mp4";
+    const { fetchFile } = window.FFmpegUtil;
+    set("", "Reading video…");
+    await ffmpeg.writeFile(inName, await fetchFile(trimFile));
+    if (!(await probeHasAudio(inName))) { set("bad", "⚠ This video has no audio track — there are no silent gaps to detect."); return; }
+    let dur = 0; try { dur = await durationOf(trimFile); } catch {}
+    if (!(dur > 0.5)) { set("bad", "⚠ Couldn\u2019t read the video\u2019s duration. Try a standard MP4/MOV."); return; }
+    set("", "Detecting silent gaps…");
+    const keeps = silenceToKeeps(await detectSilence(inName), dur, 0.06);
+    const kept = keeps.reduce((a, [a0, b0]) => a + (b0 - a0), 0);
+    if (!keeps.length || kept >= dur - 0.2) { set("ok", "✓ No silent gaps to cut — the video is already tight (" + dur.toFixed(1) + "s)."); return; }
+    // Trim + concat the spoken segments only; no rescale, so the source resolution/fps is preserved.
+    const parts = keeps.map(([a0, b0], k) => `[0:v]trim=${a0.toFixed(3)}:${b0.toFixed(3)},setpts=PTS-STARTPTS[v${k}];[0:a]atrim=${a0.toFixed(3)}:${b0.toFixed(3)},asetpts=PTS-STARTPTS[a${k}]`).join(";");
+    const ins = keeps.map((_, k) => `[v${k}][a${k}]`).join("");
+    const fc = parts + ";" + ins + `concat=n=${keeps.length}:v=1:a=1[v][a]`;
+    ph = ({ progress }) => { if (Number.isFinite(progress)) set("", "Cutting silent gaps… " + Math.max(0, Math.min(99, Math.round(progress * 100))) + "%"); };
+    ffmpeg.on("progress", ph);
+    set("", "Cutting silent gaps…");
+    await ffmpeg.exec(["-i", inName, "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
+      "-c:v", "libx264", "-crf", String(CRF), "-preset", "veryfast", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", outName]);
+    const data = await ffmpeg.readFile(outName);
+    trimBlob = new Blob([data.buffer], { type: "video/mp4" });
+    try { await ffmpeg.deleteFile(inName); await ffmpeg.deleteFile(outName); } catch {}
+    const vid = $("trimVid"); if (vid.src) { try { URL.revokeObjectURL(vid.src); } catch {} }
+    vid.src = URL.createObjectURL(trimBlob);
+    $("trimResult").style.display = "block";
+    set("ok", "✓ Done — cut " + (dur - kept).toFixed(1) + "s of silence (" + dur.toFixed(1) + "s → " + kept.toFixed(1) + "s). Preview below, then download.");
+  } catch (e) {
+    set("bad", "⚠ Couldn\u2019t process this video: " + (e && e.message ? e.message : e));
+  } finally {
+    if (ph) { try { ffmpeg.off("progress", ph); } catch {} }
+    trimBusy = false; go.disabled = false;
+  }
+}
 async function build() {
   if (building) return;
+  if (trimBusy) { fail("Finish the imported-video de-silence first, then assemble."); return; }
   const clips = scenes.filter((s) => s.video);
   if (!clips.length) { fail("No scene clips yet — generate or add at least one video."); return; }
   building = true; finalBlob = null;
