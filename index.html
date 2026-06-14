@@ -25,14 +25,14 @@
   .app { width: 100%; max-width: 600px; margin: 0 auto; }
   h1 { font-size: 22px; margin: 0 0 2px; letter-spacing: -0.02em; }
   .sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
-  .accessbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 9px 12px; margin-bottom: 14px; font-size: 12px; }
-  .accessbar .ab-tag { color: var(--accent); font-weight: 700; }
-  .accessbar .ab-item { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
-  .accessbar .ab-item b { color: var(--text); font-weight: 600; }
+  .accessbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 7px 12px; margin-bottom: 14px; font-size: 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .accessbar::-webkit-scrollbar { display: none; }
+  .accessbar .ab-item { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; }
   .accessbar a.ab-url { color: var(--text); text-decoration: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
   .accessbar a.ab-url:hover { color: var(--accent); text-decoration: underline; }
-  .accessbar .ab-copy { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; font-size: 11px; padding: 2px 7px; cursor: pointer; }
-  .accessbar .ab-copy:hover { color: var(--text); border-color: var(--accent); }
+  .accessbar .ab-copy { background: transparent; border: none; color: var(--muted); font-size: 12px; line-height: 1; padding: 0 2px; cursor: pointer; opacity: .65; }
+  .accessbar .ab-copy:hover { color: var(--accent); opacity: 1; }
+  .accessbar .ab-sep { width: 1px; align-self: stretch; background: var(--border); flex: 0 0 auto; margin: 1px 0; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
   .step { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--accent); font-weight: 700; margin-bottom: 10px; }
   label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
@@ -107,9 +107,9 @@
 <body>
 <div class="app">
   <div id="accessBar" class="accessbar" style="display:none">
-    <span class="ab-tag">📡 Open on</span>
-    <span class="ab-item"><b>Desktop:</b> <a id="abDesktop" class="ab-url" href="#" target="_blank" rel="noopener"></a> <button class="ab-copy" type="button" data-copy="abDesktop">Copy</button></span>
-    <span class="ab-item"><b>Mobile:</b> <a id="abMobile" class="ab-url" href="#" target="_blank" rel="noopener"></a> <button class="ab-copy" type="button" data-copy="abMobile">Copy</button></span>
+    <span class="ab-item">💻 <a id="abDesktop" class="ab-url" href="#" target="_blank" rel="noopener"></a> <button class="ab-copy" type="button" data-copy="abDesktop" title="Copy desktop URL">📋</button></span>
+    <span class="ab-sep"></span>
+    <span class="ab-item">📱 <a id="abMobile" class="ab-url" href="#" target="_blank" rel="noopener"></a> <button class="ab-copy" type="button" data-copy="abMobile" title="Copy mobile URL">📋</button></span>
   </div>
   <h1>AI Avatar Content Factory</h1>
   <p class="sub">Generate each scene with Seedance, then auto-assemble &amp; upscale to 1080p — on your device.</p>
@@ -250,7 +250,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v44"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v45"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() {
   const o = localStorage.getItem("atlas_base"); if (o) return o.replace(/\/+$/, "");
@@ -1459,7 +1459,7 @@ function showUpdate(reg) { const t = $("updateToast"); t.style.display = "flex";
 $("buildTag").textContent = "build " + APP_BUILD;
 (async () => {
   const bar = $("accessBar"); if (!bar) return;
-  const setUrl = (id, url) => { const a = $(id); a.textContent = url; a.href = url; };
+  const setUrl = (id, url) => { const a = $(id); a.textContent = url.replace(/^https?:\/\//, "").replace(/\/$/, ""); a.href = url; };
   // Default (e.g. on GitHub Pages): this very URL works on desktop and mobile alike.
   let desktop = location.href.replace(/[?#].*$/, "").replace(/index\.html$/, "");
   let mobile = desktop;
@@ -1477,7 +1477,7 @@ $("buildTag").textContent = "build " + APP_BUILD;
   setUrl("abMobile", mobile);
   bar.querySelectorAll(".ab-copy").forEach((b) => {
     b.onclick = async () => {
-      try { await navigator.clipboard.writeText($(b.dataset.copy).textContent); const t = b.textContent; b.textContent = "Copied"; setTimeout(() => (b.textContent = t), 1200); } catch {}
+      try { await navigator.clipboard.writeText($(b.dataset.copy).href); b.textContent = "✓"; setTimeout(() => (b.textContent = "📋"), 1200); } catch {}
     };
   });
   bar.style.display = "flex";
