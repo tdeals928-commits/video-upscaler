@@ -112,14 +112,6 @@
     <div class="keystatus" id="keyStatus"></div>
     <button class="small ghost" id="keyTest" type="button" style="margin-top:10px">Test Atlas connection</button>
     <div class="hint">Stored only in <b>this browser</b> (localStorage) and sent <b>directly to Atlas Cloud</b> when you generate — never to me or any other server. Get a key at <a href="https://www.atlascloud.ai" target="_blank" style="color:var(--accent)">atlascloud.ai</a>. Each 8s generation costs money on your Atlas account.</div>
-    <details style="margin-top:8px">
-      <summary style="font-size:12px;color:var(--muted);cursor:pointer">Advanced: custom API endpoint (use a proxy)</summary>
-      <div class="keyrow" style="margin-top:8px">
-        <input id="apiBase" type="text" placeholder="https://api.atlascloud.ai/api/v1" autocomplete="off" autocapitalize="off" spellcheck="false" />
-        <button class="small" id="baseSave" type="button">Save</button>
-      </div>
-      <div class="hint" style="margin-top:6px">Only if your browser/network blocks Atlas directly. <b>On your Mac:</b> run <code>node serve.js</code> in the project folder, then set this to <code>http://localhost:4100/api/v1</code> — calls go server-side from your Mac (immune to browser blockers). Or point it at your own Cloudflare Worker relay. Leave blank to call Atlas directly.</div>
-    </details>
 
     <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px">
       <label for="oaKey">OpenAI API key — for product research</label>
@@ -182,6 +174,8 @@
 
     <div id="scenes"></div>
     <button class="ghost" id="addScene" type="button">＋ Add scene</button>
+    <button id="genAllBtn" type="button" style="margin-top:8px">🚀 Generate all (images → videos)</button>
+    <div class="scnstatus" id="genAllStatus" style="margin-top:6px"></div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px">
       <span class="hint" id="cacheInfo" style="margin:0"></span>
       <button id="clearProject" type="button" style="width:auto;margin:0;padding:6px 10px;background:none;border:none;color:var(--muted);font-size:12px;text-decoration:underline;flex-shrink:0">Clear project &amp; cache</button>
@@ -205,13 +199,6 @@
     </select>
     <div class="hint">Detects silent pauses inside each clip and removes them (jump-cut style) so there's no dead air between lines; leading/trailing silence and black fade-in frames are cut completely — the biggest retention lever for talking videos. Skips clips that have no audio.</div>
 
-    <label style="margin-top:12px">Clip length fix</label>
-    <select id="conformSel">
-      <option value="trim">Trim longer clips down to their target length</option>
-      <option value="speed">Speed-adjust clips to their target length</option>
-      <option value="off">Off — keep clips exactly as generated</option>
-    </select>
-    <div class="hint">Applies only when a scene has a target length (from its prompt or the Clip length picker) and the actual clip differs. Note: trimming or speeding clips with <b>spoken dialogue</b> cuts words off / changes pacing — for talking scenes, prefer writing the script to fit the clip length.</div>
     <div class="hint">Final output: <b>1080×1920 (9:16) · CRF 18 (visually lossless) · faststart MP4</b>. Scenes are processed one at a time on your device.</div>
     <button class="good" id="build" type="button" disabled>Assemble &amp; upscale to 1080p</button>
     <div class="progress-wrap" id="progWrap">
@@ -250,15 +237,19 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v42"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v43"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
-function atlasBase() { return (localStorage.getItem("atlas_base") || ATLAS_DEFAULT).replace(/\/+$/, ""); }
+function atlasBase() {
+  const o = localStorage.getItem("atlas_base"); if (o) return o.replace(/\/+$/, "");
+  if (/^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/i.test(location.origin)) return location.origin + "/api/v1";
+  return ATLAS_DEFAULT;
+}
 const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
 const CANVAS_W = 1080, CANVAS_H = 1920, CRF = 18;
 const VENDOR = new URL("vendor/", location.href).href;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-let ffmpeg = null, engineReady = false, building = false;
+let ffmpeg = null, engineReady = false, building = false, autoRunning = false, autoStop = false;
 let scenes = [], idSeq = 1, musicFile = null, finalBlob = null;
 let productPhotos = [], research = "", researchName = "", researching = false, videoType = "growth30";
 let globalRef = null, globalRefThumb = null, globalRefKey = null; // one reference image for ALL scenes' image gen
@@ -282,7 +273,7 @@ function parsePromptDuration(text) {
 function sceneDur(sc) { return sc.genDur || parsePromptDuration(sc.prompt) || 8; }
 // Explicit target only (no 8s default) — used by the assembler's length fix.
 function desiredDur(sc) { return sc.genDur || parsePromptDuration(sc.prompt) || null; }
-function conformMode() { const v = localStorage.getItem("conform_mode"); return ["trim", "speed", "off"].includes(v) ? v : "trim"; }
+function conformMode() { return "off"; } // Clip-length-fix UI removed; clips play at their generated length
 // ---------- dead-space (silence) removal ----------
 function cutSilence() { return localStorage.getItem("cut_silence") !== "off"; } // default ON
 async function detectSilence(inName) {
@@ -330,7 +321,7 @@ async function measureScene(sc) {
   try { sc.realDur = sc.video ? await durationOf(sc.video) : 0; } catch { sc.realDur = 0; }
   const want = desiredDur(sc);
   if (want && sc.realDur && Math.abs(sc.realDur - want) > 0.3)
-    console.warn("[clip] scene " + sc.id + ": Atlas returned " + sc.realDur.toFixed(1) + "s but target is " + want + "s — the assembler’s Clip length fix will conform it (mode: " + conformMode() + ")");
+    console.warn("[clip] scene " + sc.id + ": Atlas returned " + sc.realDur.toFixed(1) + "s but target was " + want + "s — clip plays at its generated length.");
 }
 function updateDurLabel(sc) {
   if (!sc.el || !sc.el.durAuto) return;
@@ -705,6 +696,7 @@ $("importBtn").onclick = () => {
   renderScenes(); refreshBuild(); saveProject();
   st.className = "scnstatus ok"; st.textContent = "✓ Imported " + parsed.length + " scene" + (parsed.length > 1 ? "s" : "") + (replace ? "" : " (appended)") + " — durations auto-read from each video prompt unless set.";
   $("importTa").value = "";
+  setTimeout(() => generateAll(), 250);
 };
 
 // ---------- product photos ----------
@@ -1143,9 +1135,9 @@ function addSceneSilently() { scenes.push(newScene()); }
 function renderScene(sc) {
   const e = sc.el; if (!e) return;
   const busy = ["uploading", "queued", "processing", "starting", "running"].includes(sc.genStatus);
-  e.gen.disabled = building || busy || !getKey() || !sc.image;
+  e.gen.disabled = building || autoRunning || busy || !getKey() || !sc.image;
   e.bar.style.display = busy ? "block" : "none";
-  if (e.imgGen) e.imgGen.disabled = building || sc.imgBusy || !getOAKey();
+  if (e.imgGen) e.imgGen.disabled = building || autoRunning || sc.imgBusy || !getOAKey();
   if (e.imgStat) { e.imgStat.textContent = sc.imgStatus || ""; e.imgStat.className = "scnstatus " + (sc.imgErr ? "bad" : (/^✓/.test(sc.imgStatus || "") ? "ok" : "")); }
   if (sc.genStatus === "done" && sc.video) {
     const want = desiredDur(sc);
@@ -1166,7 +1158,51 @@ function renderScene(sc) {
   } else { e.stat.className = "scnstatus"; e.stat.textContent = ""; e.vid.style.display = "none"; e.ph.style.display = ""; e.expand.style.display = "none"; }
 }
 
+async function generateAll() {
+  if (autoRunning) { autoStop = true; const s2 = $("genAllStatus"); if (s2) s2.textContent = "⏹ Stopping after this scene…"; return; }
+  if (!scenes.length) { alert("Add or import scenes first."); return; }
+  const imgNeeded = scenes.filter((x) => (x.imagePrompt || "").trim() && !x.image).length;
+  if (imgNeeded && !getOAKey()) { alert("Add your OpenAI key in Step 1 to auto-generate first-frame images."); return; }
+  if (!getKey()) { alert("Add your Atlas key in Step 1 to auto-generate videos."); return; }
+  const vidNeeded = scenes.filter((x) => !x.video).length;
+  if (!confirm("Auto-generate " + imgNeeded + " first-frame image(s), then " + vidNeeded + " video(s)?\n\nRuns one scene at a time and bills your OpenAI + Atlas accounts. Cached clips reload free.")) return;
+  autoRunning = true; autoStop = false; updateGenAllBtn();
+  scenes.forEach(renderScene); refreshBuild();
+  const st = $("genAllStatus");
+  try {
+    for (let i = 0; i < scenes.length; i++) {
+      if (autoStop) break;
+      const sc = scenes[i];
+      if ((sc.imagePrompt || "").trim() && !sc.image) {
+        if (st) { st.className = "scnstatus"; st.textContent = "🖼 Generating image " + (i + 1) + "/" + scenes.length + "…"; }
+        await generateSceneImage(sc);
+      }
+    }
+    for (let i = 0; i < scenes.length; i++) {
+      if (autoStop) break;
+      const sc = scenes[i];
+      if (sc.image && !sc.video) {
+        if (st) { st.className = "scnstatus"; st.textContent = "🎬 Generating video " + (i + 1) + "/" + scenes.length + "…"; }
+        await generateScene(sc, false);
+      }
+    }
+    const done = scenes.filter((x) => x.video).length;
+    if (st) { st.className = "scnstatus ok"; st.textContent = (autoStop ? "⏹ Stopped — " : "✓ Done — ") + done + "/" + scenes.length + " scene(s) have a clip." + (autoStop ? "" : " Ready to assemble."); }
+  } catch (e) {
+    if (st) { st.className = "scnstatus bad"; st.textContent = "⚠ Auto-generation error: " + (e && e.message ? e.message : e); }
+  } finally {
+    autoRunning = false; autoStop = false; updateGenAllBtn();
+    scenes.forEach(renderScene); refreshBuild(); saveProject();
+  }
+}
+function updateGenAllBtn() {
+  const b = $("genAllBtn"); if (!b) return;
+  b.textContent = autoRunning ? "⏹ Stop auto-generation" : "🚀 Generate all (images → videos)";
+  b.classList.toggle("ghost", autoRunning);
+}
 $("addScene").onclick = addScene;
+$("genAllBtn").onclick = generateAll;
+updateGenAllBtn();
 $("clearProject").onclick = () => { if (confirm("Clear all scenes and cached clips from this device? You'll need to regenerate them.")) clearProject(); };
 
 // ---------- tap-to-open preview lightbox ----------
@@ -1337,7 +1373,7 @@ async function build() {
 function durationOf(blob) { return new Promise((res) => { const v = document.createElement("video"); v.preload = "metadata"; v.onloadedmetadata = () => res(v.duration); v.onerror = () => res(0); setTimeout(() => res(0), 4000); v.src = URL.createObjectURL(blob); }); }
 $("build").onclick = build;
 
-function refreshBuild() { const n = scenes.filter((s) => s.video).length; $("build").disabled = building || n === 0; $("build").textContent = n > 0 ? "Assemble & upscale " + n + " scene" + (n > 1 ? "s" : "") + " → 1080p" : "Assemble & upscale to 1080p"; }
+function refreshBuild() { const n = scenes.filter((s) => s.video).length; $("build").disabled = building || autoRunning || n === 0; $("build").textContent = n > 0 ? "Assemble & upscale " + n + " scene" + (n > 1 ? "s" : "") + " → 1080p" : "Assemble & upscale to 1080p"; }
 
 // ---------- result actions ----------
 async function saveBlob(blob, name) {
@@ -1408,8 +1444,6 @@ function showUpdate(reg) { const t = $("updateToast"); t.style.display = "flex";
 
 // ---------- init ----------
 $("buildTag").textContent = "build " + APP_BUILD;
-$("conformSel").value = conformMode();
-$("conformSel").onchange = (e) => { localStorage.setItem("conform_mode", e.target.value); scenes.forEach(renderScene); };
 $("silenceSel").value = cutSilence() ? "on" : "off";
 $("silenceSel").onchange = (e) => localStorage.setItem("cut_silence", e.target.value);
 refreshKeyStatus();
