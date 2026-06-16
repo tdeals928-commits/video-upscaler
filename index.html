@@ -275,7 +275,7 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v50"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v51"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() {
   const o = localStorage.getItem("atlas_base"); if (o) return o.replace(/\/+$/, "");
@@ -1385,7 +1385,7 @@ async function build() {
 
   const { fetchFile } = window.FFmpegUtil;
   const total = clips.length + 1; // segments + concat (music adds within concat step)
-  const segs = [];
+  const segs = [], segData = [];
   try {
     for (let i = 0; i < clips.length; i++) {
       curStep = { done: i, total, label: "Upscaling clip " + (i + 1) + " of " + clips.length + "…" };
@@ -1454,31 +1454,50 @@ async function build() {
           : [...ss, "-i", inName, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", vf, "-map", "[v]", "-map", "1:a", "-shortest", ...tail];
       }
       await ffmpeg.exec(args);
+      // Evict the finished segment out of the wasm filesystem into the JS heap so MEMFS
+      // stays small across a long timeline (17+ 1080p clips otherwise exhaust the 2GB core).
       segs.push(seg);
+      segData.push(new Uint8Array(await ffmpeg.readFile(seg)));
+      try { await ffmpeg.deleteFile(seg); } catch {}
       try { await ffmpeg.deleteFile(inName); } catch {}
     }
     curStep = null;
     setProgress(Math.round((clips.length / total) * 100), musicFile ? "Stitching + adding music…" : "Stitching together…");
+    // Write the evicted segments back, then free the JS-heap copies before the concat so
+    // only one copy (the wasm filesystem) is resident. No +faststart: it transiently
+    // doubles the (large) output in MEMFS and is the main trigger of "memory access out of
+    // bounds" on long timelines. We play/download from an in-memory Blob, so it is not needed.
+    for (let i = 0; i < segs.length; i++) await ffmpeg.writeFile(segs[i], segData[i]);
+    segData.length = 0;
     await ffmpeg.writeFile("list.txt", segs.map((s) => "file '" + s + "'").join("\n") + "\n");
-    await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "-movflags", "+faststart", "stitched.mp4"]);
 
-    let outName = "stitched.mp4";
+    let outName;
     if (musicFile) {
       const mExt = (musicFile.name.split(".").pop() || "mp3").replace(/[^a-z0-9]/gi, "") || "mp3";
       const mName = "music." + mExt;
       await ffmpeg.writeFile(mName, await fetchFile(musicFile));
-      await ffmpeg.exec(["-i", "stitched.mp4", "-stream_loop", "-1", "-i", mName,
+      // Single pass: concat (video stream-copied) + looped/ducked music — no separate
+      // full-size intermediate file.
+      await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "list.txt", "-stream_loop", "-1", "-i", mName,
         "-filter_complex", "[1:a]aresample=48000,aformat=channel_layouts=stereo,volume=0.35[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=0[a]",
-        "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "final.mp4"]);
+        "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "final.mp4"]);
       outName = "final.mp4";
       try { await ffmpeg.deleteFile(mName); } catch {}
+    } else {
+      await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "stitched.mp4"]);
+      outName = "stitched.mp4";
     }
     const data = await ffmpeg.readFile(outName);
     finalBlob = new Blob([data.buffer], { type: "video/mp4" });
     for (const s of segs) { try { await ffmpeg.deleteFile(s); } catch {} }
-    try { await ffmpeg.deleteFile("list.txt"); await ffmpeg.deleteFile("stitched.mp4"); await ffmpeg.deleteFile("final.mp4"); } catch {}
+    try { await ffmpeg.deleteFile("list.txt"); await ffmpeg.deleteFile(outName); } catch {}
   } catch (e) {
-    curStep = null; fail("Build failed: " + (e.message || e)); building = false; $("build").disabled = false; renderScenes(); return;
+    curStep = null;
+    const oom = /out of bounds|out of memory|memory access|Aborted|RangeError/i.test((e && (e.message || e)) + "");
+    fail(oom
+      ? "Build ran out of memory assembling " + clips.length + " clips on-device. Try 480p (Step 3), assembling fewer scenes at a time, or splitting the project."
+      : "Build failed: " + (e.message || e));
+    building = false; $("build").disabled = false; renderScenes(); return;
   }
   setProgress(100, "Done");
   const dur = await durationOf(finalBlob);
