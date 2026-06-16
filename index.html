@@ -275,11 +275,11 @@
 <script src="vendor/util.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const APP_BUILD = "v49"; // keep in sync with sw.js CACHE version
+const APP_BUILD = "v50"; // keep in sync with sw.js CACHE version
 const ATLAS_DEFAULT = "https://api.atlascloud.ai/api/v1";
 function atlasBase() {
   const o = localStorage.getItem("atlas_base"); if (o) return o.replace(/\/+$/, "");
-  if (/^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/i.test(location.origin)) return location.origin + "/api/v1";
+  if (isLocalOrigin()) return location.origin + "/api/v1";
   return ATLAS_DEFAULT;
 }
 const MODEL = "bytedance/seedance-v1.5-pro/image-to-video";
@@ -378,12 +378,17 @@ function updateDurLabel(sc) {
 const OPENAI_DEFAULT = "https://api.openai.com/v1";
 // Prefer a relay (serve.js / Worker) for OpenAI — it has no browser CORS and the
 // network's upload block doesn't apply to a server-side call.
+function isLocalOrigin() {
+  // localhost, loopback, or a private-LAN address (192.168.x / 10.x / 172.16-31.x / *.local):
+  // all of these are served by serve.js, which also hosts the relays at the same origin.
+  return /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\]|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.|[a-z0-9-]+\.local(?:$|[:\/]))/i.test(location.origin);
+}
 function openaiBase() {
   const o = localStorage.getItem("openai_base"); if (o) return o.replace(/\/+$/, "");
   const ab = localStorage.getItem("atlas_base"); // reuse the Atlas relay's host
   if (ab) { try { return new URL(ab).origin + "/openai/v1"; } catch {} }
   // served by the local relay (serve.js serves /openai/v1 same-origin)?
-  if (/^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/i.test(location.origin)) return location.origin + "/openai/v1";
+  if (isLocalOrigin()) return location.origin + "/openai/v1";
   return OPENAI_DEFAULT;
 }
 const OA_MODELS = ["gpt-5.5", "gpt-5.2", "gpt-5.1", "gpt-4o"]; // first id the account accepts wins; remembered
